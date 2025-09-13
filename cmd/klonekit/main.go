@@ -1,0 +1,56 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"klonekit/internal/parser"
+)
+
+var rootCmd = &cobra.Command{
+	Use:   "klonekit",
+	Short: "KloneKit - Infrastructure provisioning and GitLab project setup tool",
+	Long: `KloneKit is a CLI tool that helps DevOps engineers provision infrastructure
+and set up GitLab projects using blueprint configurations.`,
+}
+
+var applyCmd = &cobra.Command{
+	Use:   "apply",
+	Short: "Apply a blueprint configuration",
+	Long: `Apply processes a blueprint YAML file and executes the infrastructure
+provisioning and GitLab setup according to the configuration.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		file, _ := cmd.Flags().GetString("file")
+		if file == "" {
+			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+			os.Exit(1)
+		}
+
+		// Parse and validate the blueprint file
+		blueprint, err := parser.Parse(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully parsed blueprint: %s\n", blueprint.Metadata.Name)
+		fmt.Printf("  Kind: %s\n", blueprint.Kind)
+		fmt.Printf("  API Version: %s\n", blueprint.APIVersion)
+		fmt.Printf("  Description: %s\n", blueprint.Metadata.Description)
+	},
+}
+
+func init() {
+	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	applyCmd.MarkFlagRequired("file")
+	rootCmd.AddCommand(applyCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
