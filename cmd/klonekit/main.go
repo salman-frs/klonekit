@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"klonekit/internal/parser"
+	"klonekit/internal/provisioner"
 	"klonekit/internal/scaffolder"
 	"klonekit/internal/scm"
 )
@@ -118,6 +119,44 @@ GitLab repository using the GitLab API and git operations.`,
 	},
 }
 
+var provisionCmd = &cobra.Command{
+	Use:   "provision",
+	Short: "Provision infrastructure using containerized Terraform",
+	Long: `Provision executes Terraform commands within a Docker container to provision
+infrastructure defined in the scaffolded Terraform files. This ensures a consistent
+and isolated environment for infrastructure provisioning.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		file, _ := cmd.Flags().GetString("file")
+		if file == "" {
+			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+			os.Exit(1)
+		}
+
+		// Parse and validate the blueprint file
+		blueprint, err := parser.Parse(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		// Provision infrastructure using Docker
+		fmt.Printf("Provisioning infrastructure for: %s\n", blueprint.Metadata.Name)
+
+		provisioner, err := provisioner.NewTerraformDockerProvisioner()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		if err := provisioner.Provision(&blueprint.Spec); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully provisioned infrastructure for: %s\n", blueprint.Metadata.Name)
+	},
+}
+
 func init() {
 	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	applyCmd.MarkFlagRequired("file")
@@ -131,6 +170,10 @@ func init() {
 	scmCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	scmCmd.MarkFlagRequired("file")
 	rootCmd.AddCommand(scmCmd)
+
+	provisionCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	provisionCmd.MarkFlagRequired("file")
+	rootCmd.AddCommand(provisionCmd)
 }
 
 func main() {
