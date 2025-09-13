@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"klonekit/internal/app"
 	"klonekit/internal/parser"
 	"klonekit/internal/provisioner"
 	"klonekit/internal/scaffolder"
@@ -21,9 +22,11 @@ and set up GitLab projects using blueprint configurations.`,
 
 var applyCmd = &cobra.Command{
 	Use:   "apply",
-	Short: "Apply a blueprint configuration",
-	Long: `Apply processes a blueprint YAML file and executes the infrastructure
-provisioning and GitLab setup according to the configuration.`,
+	Short: "Apply a complete blueprint workflow",
+	Long: `Apply executes the complete KloneKit workflow: scaffolding Terraform files,
+creating GitLab repositories, and provisioning infrastructure - all from a single command.
+
+This orchestrates all individual commands (scaffold, scm, provision) in the correct sequence.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		file, _ := cmd.Flags().GetString("file")
 		if file == "" {
@@ -31,17 +34,13 @@ provisioning and GitLab setup according to the configuration.`,
 			os.Exit(1)
 		}
 
-		// Parse and validate the blueprint file
-		blueprint, err := parser.Parse(file)
-		if err != nil {
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+		// Execute the complete workflow via app orchestrator
+		if err := app.Apply(file, dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
-
-		fmt.Printf("Successfully parsed blueprint: %s\n", blueprint.Metadata.Name)
-		fmt.Printf("  Kind: %s\n", blueprint.Kind)
-		fmt.Printf("  API Version: %s\n", blueprint.APIVersion)
-		fmt.Printf("  Description: %s\n", blueprint.Metadata.Description)
 	},
 }
 
@@ -159,6 +158,7 @@ and isolated environment for infrastructure provisioning.`,
 
 func init() {
 	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	applyCmd.Flags().Bool("dry-run", false, "Simulate the workflow without making any changes")
 	applyCmd.MarkFlagRequired("file")
 	rootCmd.AddCommand(applyCmd)
 
