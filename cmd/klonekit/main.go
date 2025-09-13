@@ -8,6 +8,7 @@ import (
 
 	"klonekit/internal/parser"
 	"klonekit/internal/scaffolder"
+	"klonekit/internal/scm"
 )
 
 var rootCmd = &cobra.Command{
@@ -80,6 +81,43 @@ of Terraform files locally for verification before infrastructure creation.`,
 	},
 }
 
+var scmCmd = &cobra.Command{
+	Use:   "scm",
+	Short: "Create GitLab repository from scaffolded project",
+	Long: `SCM processes a scaffolded project directory and publishes it to a new
+GitLab repository using the GitLab API and git operations.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		file, _ := cmd.Flags().GetString("file")
+		if file == "" {
+			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+			os.Exit(1)
+		}
+
+		// Parse and validate the blueprint file
+		blueprint, err := parser.Parse(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		// Create GitLab repository and push scaffolded files
+		fmt.Printf("Creating GitLab repository for: %s\n", blueprint.Metadata.Name)
+
+		provider, err := scm.NewGitLabProvider()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		if err := provider.CreateRepo(&blueprint.Spec); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully created GitLab repository: %s\n", blueprint.Spec.SCM.Project.Name)
+	},
+}
+
 func init() {
 	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	applyCmd.MarkFlagRequired("file")
@@ -89,6 +127,10 @@ func init() {
 	scaffoldCmd.Flags().Bool("dry-run", false, "Print files that would be created without actually writing them")
 	scaffoldCmd.MarkFlagRequired("file")
 	rootCmd.AddCommand(scaffoldCmd)
+
+	scmCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	scmCmd.MarkFlagRequired("file")
+	rootCmd.AddCommand(scmCmd)
 }
 
 func main() {
