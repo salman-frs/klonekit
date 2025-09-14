@@ -4,18 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-
 	"klonekit/pkg/blueprint"
+	"klonekit/pkg/runtime"
 )
 
 const (
@@ -31,29 +26,16 @@ type Provisioner interface {
 	Provision(spec *blueprint.Spec) error
 }
 
-// TerraformDockerProvisioner implements the Provisioner interface using Docker containers.
+// TerraformDockerProvisioner implements the Provisioner interface using container runtime.
 type TerraformDockerProvisioner struct {
-	dockerClient *client.Client
+	containerRuntime runtime.ContainerRuntime
 }
 
 // NewTerraformDockerProvisioner creates a new TerraformDockerProvisioner.
-func NewTerraformDockerProvisioner() (*TerraformDockerProvisioner, error) {
-	// Create Docker client
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
-	}
-
-	// Check if Docker daemon is accessible
-	ctx := context.Background()
-	_, err = dockerClient.Ping(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Docker daemon: %w", err)
-	}
-
+func NewTerraformDockerProvisioner(containerRuntime runtime.ContainerRuntime) *TerraformDockerProvisioner {
 	return &TerraformDockerProvisioner{
-		dockerClient: dockerClient,
-	}, nil
+		containerRuntime: containerRuntime,
+	}
 }
 
 // Provision executes Terraform init and apply commands within a Docker container.
@@ -69,7 +51,7 @@ func (p *TerraformDockerProvisioner) Provision(spec *blueprint.Spec) error {
 	slog.Info("Starting infrastructure provisioning", "scaffoldDir", scaffoldDir)
 
 	// Pull Terraform Docker image
-	if err := p.pullTerraformImage(ctx); err != nil {
+	if err := p.containerRuntime.PullImage(ctx, TerraformDockerImage); err != nil {
 		return fmt.Errorf("failed to pull Terraform image: %w", err)
 	}
 
@@ -85,43 +67,17 @@ func (p *TerraformDockerProvisioner) Provision(spec *blueprint.Spec) error {
 		return fmt.Errorf("failed to locate AWS credentials directory: %w", err)
 	}
 
-	// Create container configuration
-	containerConfig, hostConfig, err := p.createContainerConfig(absScaffoldDir, awsCredsDir)
-	if err != nil {
-		return fmt.Errorf("failed to create container configuration: %w", err)
-	}
-
 	// Execute Terraform init
-	if err := p.runTerraformCommand(ctx, containerConfig, hostConfig, "init"); err != nil {
+	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, "init"); err != nil {
 		return fmt.Errorf("terraform init failed: %w", err)
 	}
 
 	// Execute Terraform apply with auto-approve
-	if err := p.runTerraformCommand(ctx, containerConfig, hostConfig, "apply", "-auto-approve"); err != nil {
+	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, "apply", "-auto-approve"); err != nil {
 		return fmt.Errorf("terraform apply failed: %w", err)
 	}
 
 	slog.Info("Infrastructure provisioning completed successfully")
-	return nil
-}
-
-// pullTerraformImage pulls the Terraform Docker image if not already present.
-func (p *TerraformDockerProvisioner) pullTerraformImage(ctx context.Context) error {
-	slog.Info("Pulling Terraform Docker image", "image", TerraformDockerImage)
-
-	reader, err := p.dockerClient.ImagePull(ctx, TerraformDockerImage, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to pull image %s: %w", TerraformDockerImage, err)
-	}
-	defer reader.Close()
-
-	// Stream the pull output (but don't print it to avoid clutter)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return fmt.Errorf("failed to stream image pull output: %w", err)
-	}
-
-	slog.Info("Successfully pulled Terraform Docker image")
 	return nil
 }
 
@@ -142,110 +98,50 @@ func (p *TerraformDockerProvisioner) getAWSCredentialsDir() (string, error) {
 	return awsDir, nil
 }
 
-// createContainerConfig creates Docker container and host configurations.
-func (p *TerraformDockerProvisioner) createContainerConfig(scaffoldDir, awsCredsDir string) (*container.Config, *container.HostConfig, error) {
-	containerConfig := &container.Config{
-		Image:      TerraformDockerImage,
-		WorkingDir: WorkingDirectory,
-		Tty:        true,
-		Env: []string{
-			"AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials",
-			"AWS_CONFIG_FILE=/root/.aws/config",
-		},
-	}
-
-	hostConfig := &container.HostConfig{
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: scaffoldDir,
-				Target: WorkingDirectory,
-			},
-			{
-				Type:     mount.TypeBind,
-				Source:   awsCredsDir,
-				Target:   "/root/.aws",
-				ReadOnly: true, // Mount AWS credentials as read-only for security
-			},
-		},
-	}
-
-	return containerConfig, hostConfig, nil
-}
-
-// runTerraformCommand executes a Terraform command within a Docker container.
-func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, containerConfig *container.Config, hostConfig *container.HostConfig, args ...string) error {
-	// Set the command to execute
+// runTerraformCommand executes a Terraform command using the container runtime.
+func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, scaffoldDir, awsCredsDir string, args ...string) error {
+	// Build the terraform command
 	cmd := append([]string{"terraform"}, args...)
-	containerConfig.Cmd = cmd
 
 	slog.Info("Executing Terraform command", "command", cmd)
 
-	// Create container
-	resp, err := p.dockerClient.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
+	// Create RunOptions for the container
+	opts := runtime.RunOptions{
+		Image:   TerraformDockerImage,
+		Command: cmd,
+		VolumeMounts: map[string]string{
+			scaffoldDir: WorkingDirectory,
+			awsCredsDir: "/root/.aws",
+		},
+		EnvVars: map[string]string{
+			"AWS_SHARED_CREDENTIALS_FILE": "/root/.aws/credentials",
+			"AWS_CONFIG_FILE":             "/root/.aws/config",
+		},
+		WorkingDirectory: WorkingDirectory,
+	}
+
+	// Run the container
+	reader, err := p.containerRuntime.RunContainer(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("failed to create container: %w", err)
+		return fmt.Errorf("failed to run container: %w", err)
 	}
+	defer reader.Close()
 
-	containerID := resp.ID
-	defer func() {
-		// Clean up container
-		p.dockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-	}()
-
-	// Start container
-	if err := p.dockerClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
-	}
-
-	// Attach to container to stream output
-	if err := p.streamContainerOutput(ctx, containerID); err != nil {
-		return fmt.Errorf("failed to stream container output: %w", err)
-	}
-
-	// Wait for container to finish
-	statusCh, errCh := p.dockerClient.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("error waiting for container: %w", err)
-		}
-	case status := <-statusCh:
-		if status.StatusCode != 0 {
-			return fmt.Errorf("terraform command failed with exit code: %d", status.StatusCode)
-		}
-	}
-
-	slog.Info("Terraform command completed successfully", "command", cmd)
-	return nil
-}
-
-// streamContainerOutput streams container stdout/stderr to the console in real-time.
-func (p *TerraformDockerProvisioner) streamContainerOutput(ctx context.Context, containerID string) error {
-	out, err := p.dockerClient.ContainerLogs(ctx, containerID, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Follow:     true,
-		Timestamps: false,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get container logs: %w", err)
-	}
-	defer out.Close()
-
-	// Stream output to stdout in real-time
-	scanner := bufio.NewScanner(out)
+	// Stream the output
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Docker logs include a header, skip it for clean output
+		// Skip Docker log headers for clean output
 		if len(line) > 8 {
-			fmt.Println(line[8:]) // Skip the 8-byte Docker log header
+			line = line[8:] // Remove Docker log header
 		}
+		slog.Info("Terraform output", "line", line)
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading container output: %w", err)
 	}
 
+	slog.Info("Terraform command completed successfully", "command", cmd)
 	return nil
 }

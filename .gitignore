@@ -52,6 +52,9 @@ coverage.html
 .env
 .env.local
 
+# KloneKit state file
+.klonekit.state.json
+
 # Output directories that might be created during development
 /output/
 /temp/

@@ -6,6 +6,7 @@ import (
 
 	"klonekit/internal/parser"
 	"klonekit/internal/provisioner"
+	"klonekit/internal/runtime"
 	"klonekit/internal/scaffolder"
 	"klonekit/internal/scm"
 )
@@ -90,12 +91,16 @@ func Apply(blueprintPath string, isDryRun bool) error {
 		fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure in %s region%s\n",
 			ColorYellow, blueprint.Spec.Cloud.Region, ColorReset)
 	} else {
-		provisioner, err := provisioner.NewTerraformDockerProvisioner()
+		// Create Docker runtime instance
+		dockerRuntime, err := runtime.NewDockerRuntime()
 		if err != nil {
-			return fmt.Errorf("provisioner initialization failed: %w", err)
+			return fmt.Errorf("failed to create Docker runtime: %w", err)
 		}
 
-		if err := provisioner.Provision(&blueprint.Spec); err != nil {
+		// Create provisioner with the runtime
+		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
+
+		if err := terraformProvisioner.Provision(&blueprint.Spec); err != nil {
 			return fmt.Errorf("infrastructure provisioning failed: %w", err)
 		}
 	}
@@ -126,7 +131,7 @@ func ValidatePrerequisites() error {
 	slog.Info("Validating KloneKit prerequisites")
 
 	// Check if Docker is available (required for provisioning)
-	if _, err := provisioner.NewTerraformDockerProvisioner(); err != nil {
+	if _, err := runtime.NewDockerRuntime(); err != nil {
 		return fmt.Errorf("Docker prerequisite check failed: %w", err)
 	}
 

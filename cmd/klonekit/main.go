@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -9,6 +10,7 @@ import (
 	"klonekit/internal/app"
 	"klonekit/internal/parser"
 	"klonekit/internal/provisioner"
+	"klonekit/internal/runtime"
 	"klonekit/internal/scaffolder"
 	"klonekit/internal/scm"
 )
@@ -141,13 +143,17 @@ and isolated environment for infrastructure provisioning.`,
 		// Provision infrastructure using Docker
 		fmt.Printf("Provisioning infrastructure for: %s\n", blueprint.Metadata.Name)
 
-		provisioner, err := provisioner.NewTerraformDockerProvisioner()
+		// Create Docker runtime instance
+		dockerRuntime, err := runtime.NewDockerRuntime()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			fmt.Fprintf(os.Stderr, "Error creating Docker runtime: %s\n", err)
 			os.Exit(1)
 		}
 
-		if err := provisioner.Provision(&blueprint.Spec); err != nil {
+		// Create provisioner with the runtime
+		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
+
+		if err := terraformProvisioner.Provision(&blueprint.Spec); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
@@ -159,20 +165,28 @@ and isolated environment for infrastructure provisioning.`,
 func init() {
 	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	applyCmd.Flags().Bool("dry-run", false, "Simulate the workflow without making any changes")
-	applyCmd.MarkFlagRequired("file")
+	if err := applyCmd.MarkFlagRequired("file"); err != nil {
+		slog.Error("Failed to mark file flag as required for apply command", "error", err)
+	}
 	rootCmd.AddCommand(applyCmd)
 
 	scaffoldCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	scaffoldCmd.Flags().Bool("dry-run", false, "Print files that would be created without actually writing them")
-	scaffoldCmd.MarkFlagRequired("file")
+	if err := scaffoldCmd.MarkFlagRequired("file"); err != nil {
+		slog.Error("Failed to mark file flag as required for scaffold command", "error", err)
+	}
 	rootCmd.AddCommand(scaffoldCmd)
 
 	scmCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
-	scmCmd.MarkFlagRequired("file")
+	if err := scmCmd.MarkFlagRequired("file"); err != nil {
+		slog.Error("Failed to mark file flag as required for scm command", "error", err)
+	}
 	rootCmd.AddCommand(scmCmd)
 
 	provisionCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
-	provisionCmd.MarkFlagRequired("file")
+	if err := provisionCmd.MarkFlagRequired("file"); err != nil {
+		slog.Error("Failed to mark file flag as required for provision command", "error", err)
+	}
 	rootCmd.AddCommand(provisionCmd)
 }
 
