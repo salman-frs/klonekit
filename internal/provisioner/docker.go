@@ -83,12 +83,21 @@ func (p *TerraformDockerProvisioner) Provision(spec *blueprint.Spec) error {
 
 // getAWSCredentialsDir returns the path to the user's AWS credentials directory.
 func (p *TerraformDockerProvisioner) getAWSCredentialsDir() (string, error) {
-	currentUser, err := user.Current()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current user: %w", err)
+	var homeDir string
+
+	// First try to get HOME from environment variable (respects test overrides)
+	if envHome := os.Getenv("HOME"); envHome != "" {
+		homeDir = envHome
+	} else {
+		// Fallback to system user home directory
+		currentUser, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current user: %w", err)
+		}
+		homeDir = currentUser.HomeDir
 	}
 
-	awsDir := filepath.Join(currentUser.HomeDir, ".aws")
+	awsDir := filepath.Join(homeDir, ".aws")
 
 	// Check if AWS credentials directory exists
 	if _, err := os.Stat(awsDir); os.IsNotExist(err) {
