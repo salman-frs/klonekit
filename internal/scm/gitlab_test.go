@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-git/go-git/v5"
+	git "github.com/go-git/go-git/v5"
 	gitlab "github.com/xanzy/go-gitlab"
 
 	"klonekit/pkg/blueprint"
