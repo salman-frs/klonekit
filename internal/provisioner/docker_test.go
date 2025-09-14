@@ -17,6 +17,51 @@ import (
 	runtimePkg "klonekit/pkg/runtime"
 )
 
+// TestMain sets up mock AWS credentials for testing
+func TestMain(m *testing.M) {
+	// Create temporary AWS credentials directory
+	tmpDir, err := os.MkdirTemp("", "aws-test-*")
+	if err != nil {
+		panic("Failed to create temp directory: " + err.Error())
+	}
+	defer os.RemoveAll(tmpDir)
+
+	awsDir := filepath.Join(tmpDir, ".aws")
+	if err := os.MkdirAll(awsDir, 0755); err != nil {
+		panic("Failed to create .aws directory: " + err.Error())
+	}
+
+	// Create mock credentials file
+	credentialsContent := `[default]
+aws_access_key_id = test-access-key-id
+aws_secret_access_key = test-secret-access-key
+region = us-east-1
+`
+	credentialsFile := filepath.Join(awsDir, "credentials")
+	if err := os.WriteFile(credentialsFile, []byte(credentialsContent), 0644); err != nil {
+		panic("Failed to create credentials file: " + err.Error())
+	}
+
+	// Set environment variables to point to mock credentials
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AWS_ACCESS_KEY_ID", "test-access-key-id")
+	os.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-access-key")
+	os.Setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+	// Run tests
+	code := m.Run()
+
+	// Restore original HOME environment variable
+	if originalHome != "" {
+		os.Setenv("HOME", originalHome)
+	} else {
+		os.Unsetenv("HOME")
+	}
+
+	os.Exit(code)
+}
+
 // MockContainerRuntime is a mock implementation of the ContainerRuntime interface
 type MockContainerRuntime struct {
 	mock.Mock
