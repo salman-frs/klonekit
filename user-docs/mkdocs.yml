@@ -4,6 +4,7 @@ site_description: A blueprint-driven DevOps automation tool for GitLab and AWS i
 site_author: KloneKit Team
 repo_url: https://github.com/salman-frs/klonekit
 repo_name: salman-frs/klonekit
+docs_dir: docs
 
 theme:
   name: material
