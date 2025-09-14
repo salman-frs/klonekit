@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/google/uuid"
 	"klonekit/internal/parser"
 	"klonekit/internal/provisioner"
 	"klonekit/internal/runtime"
 	"klonekit/internal/scaffolder"
 	"klonekit/internal/scm"
+	"klonekit/pkg/blueprint"
 )
 
 const (
@@ -23,30 +25,142 @@ const (
 	ColorWhite  = "\033[37m"
 )
 
-// Apply orchestrates the complete KloneKit workflow: parse, scaffold, scm, provision.
-// This function implements the Facade pattern over all internal components.
-func Apply(blueprintPath string, isDryRun bool) error {
+// Apply orchestrates the complete KloneKit workflow using a stateful execution engine.
+// This function implements the Facade pattern over all internal components with resume capability.
+func Apply(blueprintPath string, isDryRun bool, retainState bool) error {
 	slog.Info("Starting KloneKit apply workflow", "blueprintPath", blueprintPath, "dryRun", isDryRun)
 
-	if isDryRun {
-		fmt.Printf("%s🔍 DRY RUN MODE - No actual changes will be made%s\n", ColorYellow, ColorReset)
+	// Load existing state or create new state
+	state, err := loadState()
+	if err != nil {
+		return fmt.Errorf("failed to load execution state: %w", err)
+	}
+
+	var isResume bool
+	if state == nil {
+		// Fresh start - create new state
+		runID := uuid.New().String()
+		state = newState(blueprintPath, runID)
+		slog.Info("Starting new KloneKit workflow", "runId", runID, "blueprintPath", blueprintPath)
+	} else {
+		// Resume existing run
+		isResume = true
+		nextStage := state.getNextStage()
+		fmt.Printf("%s📋 State file found. Resuming from stage: %s%s\n", ColorYellow, nextStage, ColorReset)
+		slog.Info("Resuming KloneKit workflow", "runId", state.RunID, "nextStage", nextStage, "lastStage", state.LastSuccessfulStage)
 		fmt.Println()
 	}
 
-	// Stage 1: Parse and validate blueprint
-	fmt.Printf("%s📋 Stage 1: Parsing blueprint configuration%s\n", ColorBlue, ColorReset)
+	if isDryRun {
+		fmt.Printf("%s🔍 DRY RUN MODE - No actual changes will be made%s\n", ColorYellow, ColorReset)
+		if isResume {
+			fmt.Printf("%s🔍 DRY RUN: Simulating resume from stage: %s%s\n", ColorYellow, state.getNextStage(), ColorReset)
+		}
+		fmt.Println()
+	}
+
+	// Parse blueprint (needed for all stages)
 	blueprint, err := parser.Parse(blueprintPath)
 	if err != nil {
 		return fmt.Errorf("blueprint parsing failed: %w", err)
 	}
-	fmt.Printf("%s✅ Blueprint parsed successfully: %s%s\n", ColorGreen, blueprint.Metadata.Name, ColorReset)
 	slog.Info("Blueprint parsed successfully", "name", blueprint.Metadata.Name, "kind", blueprint.Kind)
-	fmt.Println()
 
-	// Stage 2: Scaffold Terraform files
-	fmt.Printf("%s🚧 Stage 2: Scaffolding Terraform files%s\n", ColorCyan, ColorReset)
+	// Stage 1: Scaffold Terraform files
+	if !state.shouldSkipStage(StageScaffold) {
+		fmt.Printf("%s🚧 Stage 1: Scaffolding Terraform files%s\n", ColorCyan, ColorReset)
+		if err := executeScaffoldStage(blueprint, isDryRun); err != nil {
+			return fmt.Errorf("scaffolding failed: %w", err)
+		}
+
+		// Update state after successful completion
+		state.LastSuccessfulStage = StageScaffold
+		if !isDryRun {
+			if err := saveState(state); err != nil {
+				return fmt.Errorf("failed to save state after scaffolding: %w", err)
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Printf("%s⏭️  Stage 1: Scaffolding (skipped - already completed)%s\n", ColorGreen, ColorReset)
+		fmt.Println()
+	}
+
+	// Stage 2: Source Control Management
+	if !state.shouldSkipStage(StageSCM) {
+		fmt.Printf("%s📱 Stage 2: Creating GitLab repository%s\n", ColorPurple, ColorReset)
+		if err := executeSCMStage(blueprint, isDryRun); err != nil {
+			return fmt.Errorf("SCM stage failed: %w", err)
+		}
+
+		// Update state after successful completion
+		state.LastSuccessfulStage = StageSCM
+		if !isDryRun {
+			if err := saveState(state); err != nil {
+				return fmt.Errorf("failed to save state after SCM: %w", err)
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Printf("%s⏭️  Stage 2: SCM (skipped - already completed)%s\n", ColorGreen, ColorReset)
+		fmt.Println()
+	}
+
+	// Stage 3: Infrastructure Provisioning
+	if !state.shouldSkipStage(StageProvision) {
+		fmt.Printf("%s🏗️  Stage 3: Provisioning infrastructure%s\n", ColorRed, ColorReset)
+		if err := executeProvisionStage(blueprint, isDryRun); err != nil {
+			return fmt.Errorf("provisioning stage failed: %w", err)
+		}
+
+		// Update state after successful completion
+		state.LastSuccessfulStage = StageProvision
+		if !isDryRun {
+			if err := saveState(state); err != nil {
+				return fmt.Errorf("failed to save state after provisioning: %w", err)
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Printf("%s⏭️  Stage 3: Provisioning (skipped - already completed)%s\n", ColorGreen, ColorReset)
+		fmt.Println()
+	}
+
+	// Mark workflow as completed and clean up state file
+	state.LastSuccessfulStage = StageCompleted
+	if !isDryRun {
+		if retainState {
+			// Save final state for auditing purposes
+			if err := saveState(state); err != nil {
+				slog.Warn("Failed to save final state", "error", err)
+			} else {
+				slog.Info("State file retained for auditing", "file", StateFileName)
+			}
+		} else {
+			// Remove state file on successful completion
+			if err := removeStateFile(); err != nil {
+				slog.Warn("Failed to clean up state file", "error", err)
+			}
+		}
+	}
+
+	// Workflow completion
+	if isDryRun {
+		fmt.Printf("%s🎉 DRY RUN COMPLETED - All stages simulated successfully!%s\n", ColorGreen, ColorReset)
+		fmt.Printf("%sNo actual resources were created or modified.%s\n", ColorYellow, ColorReset)
+	} else {
+		fmt.Printf("%s🎉 KLONEKIT APPLY COMPLETED SUCCESSFULLY!%s\n", ColorGreen, ColorReset)
+		fmt.Printf("%s✨ Your infrastructure project '%s' is ready!%s\n", ColorWhite, blueprint.Metadata.Name, ColorReset)
+	}
+
+	slog.Info("KloneKit apply workflow completed successfully", "blueprintName", blueprint.Metadata.Name, "dryRun", isDryRun)
+	return nil
+}
+
+// executeScaffoldStage handles the scaffolding stage of the workflow
+func executeScaffoldStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 	if err := scaffolder.Scaffold(&blueprint.Spec, isDryRun); err != nil {
-		return fmt.Errorf("scaffolding failed: %w", err)
+		return err
 	}
 
 	if isDryRun {
@@ -55,10 +169,11 @@ func Apply(blueprintPath string, isDryRun bool) error {
 		fmt.Printf("%s✅ Terraform files scaffolded to: %s%s\n", ColorGreen, blueprint.Spec.Scaffold.Destination, ColorReset)
 	}
 	slog.Info("Scaffolding completed successfully", "destination", blueprint.Spec.Scaffold.Destination, "dryRun", isDryRun)
-	fmt.Println()
+	return nil
+}
 
-	// Stage 3: Source Control Management
-	fmt.Printf("%s📱 Stage 3: Creating GitLab repository%s\n", ColorPurple, ColorReset)
+// executeSCMStage handles the source control management stage of the workflow
+func executeSCMStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 	if isDryRun {
 		fmt.Printf("%s🔍 DRY RUN: Would create GitLab repository '%s' in namespace '%s'%s\n",
 			ColorYellow, blueprint.Spec.SCM.Project.Name, blueprint.Spec.SCM.Project.Namespace, ColorReset)
@@ -80,10 +195,11 @@ func Apply(blueprintPath string, isDryRun bool) error {
 		fmt.Printf("%s✅ GitLab repository created: %s%s\n", ColorGreen, blueprint.Spec.SCM.Project.Name, ColorReset)
 	}
 	slog.Info("SCM stage completed successfully", "repoName", blueprint.Spec.SCM.Project.Name, "dryRun", isDryRun)
-	fmt.Println()
+	return nil
+}
 
-	// Stage 4: Infrastructure Provisioning
-	fmt.Printf("%s🏗️  Stage 4: Provisioning infrastructure%s\n", ColorRed, ColorReset)
+// executeProvisionStage handles the infrastructure provisioning stage of the workflow
+func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 	if isDryRun {
 		fmt.Printf("%s🔍 DRY RUN: Would pull Terraform Docker image%s\n", ColorYellow, ColorReset)
 		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform init' in container%s\n", ColorYellow, ColorReset)
@@ -111,18 +227,6 @@ func Apply(blueprintPath string, isDryRun bool) error {
 		fmt.Printf("%s✅ Infrastructure provisioned successfully in %s%s\n", ColorGreen, blueprint.Spec.Cloud.Region, ColorReset)
 	}
 	slog.Info("Provisioning stage completed successfully", "region", blueprint.Spec.Cloud.Region, "dryRun", isDryRun)
-	fmt.Println()
-
-	// Workflow completion
-	if isDryRun {
-		fmt.Printf("%s🎉 DRY RUN COMPLETED - All stages simulated successfully!%s\n", ColorGreen, ColorReset)
-		fmt.Printf("%sNo actual resources were created or modified.%s\n", ColorYellow, ColorReset)
-	} else {
-		fmt.Printf("%s🎉 KLONEKIT APPLY COMPLETED SUCCESSFULLY!%s\n", ColorGreen, ColorReset)
-		fmt.Printf("%s✨ Your infrastructure project '%s' is ready!%s\n", ColorWhite, blueprint.Metadata.Name, ColorReset)
-	}
-
-	slog.Info("KloneKit apply workflow completed successfully", "blueprintName", blueprint.Metadata.Name, "dryRun", isDryRun)
 	return nil
 }
 

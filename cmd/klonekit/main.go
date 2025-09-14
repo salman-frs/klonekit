@@ -37,9 +37,10 @@ This orchestrates all individual commands (scaffold, scm, provision) in the corr
 		}
 
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		retainState, _ := cmd.Flags().GetBool("retain-state")
 
 		// Execute the complete workflow via app orchestrator
-		if err := app.Apply(file, dryRun); err != nil {
+		if err := app.Apply(file, dryRun, retainState); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
@@ -165,6 +166,7 @@ and isolated environment for infrastructure provisioning.`,
 func init() {
 	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
 	applyCmd.Flags().Bool("dry-run", false, "Simulate the workflow without making any changes")
+	applyCmd.Flags().Bool("retain-state", false, "Keep the state file after successful completion for auditing purposes")
 	if err := applyCmd.MarkFlagRequired("file"); err != nil {
 		slog.Error("Failed to mark file flag as required for apply command", "error", err)
 	}
