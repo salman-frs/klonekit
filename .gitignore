@@ -67,6 +67,23 @@ coverage.html
 terraform.tfvars
 terraform.tfvars.json
 
+# Python virtual environments and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# MkDocs
+user-docs/site/
+.cache/
+
 # tools specific directories and files
 .claude/
 .gemini/

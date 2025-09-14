@@ -113,22 +113,33 @@ jobs:
           path: klonekit-${{ steps.version.outputs.version }}-${{ matrix.artifact-name }}${{ matrix.binary-ext }}
 
   # ----------------------------------------------------------------
-  # DEPLOY-DOCS: Deploy the user guide to GitHub Pages.
+  # DEPLOY-DOCS: Deploy the documentation to GitHub Pages.
   # ----------------------------------------------------------------
   deploy-docs:
-    name: Deploy User Guide
+    name: Deploy Documentation
     needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install MkDocs dependencies
+        run: |
+          pip install -r user-docs/requirements.txt
+      - name: Build documentation
+        run: |
+          cd user-docs
+          mkdocs build --config-file mkdocs.yml
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v4
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./user-guide
+          path: ./user-docs/site
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
 

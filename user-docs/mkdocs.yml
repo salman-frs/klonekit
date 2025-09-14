@@ -1,0 +1,98 @@
+site_name: KloneKit Documentation
+site_url: https://salman-frs.github.io/klonekit
+site_description: A blueprint-driven DevOps automation tool for GitLab and AWS infrastructure workflows
+site_author: KloneKit Team
+repo_url: https://github.com/salman-frs/klonekit
+repo_name: salman-frs/klonekit
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      enable_creation_date: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Concepts:
+    - concepts/overview.md
+    - concepts/architecture.md
+    - concepts/blueprints.md
+  - Tasks:
+    - tasks/installation.md
+    - tasks/getting-started.md
+    - tasks/configuration.md
+    - tasks/troubleshooting.md
+  - Tutorials:
+    - tutorials/basic-setup.md
+    - tutorials/advanced-workflows.md
+  - Reference:
+    - reference/cli.md
+    - reference/blueprint-schema.md
+    - reference/examples.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/salman-frs/klonekit
