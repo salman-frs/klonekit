@@ -1,0 +1,12 @@
+run:
+  timeout: 10m
+  tests: true
+  issues-exit-code: 1
+
+issues:
+  exclude-dirs:
+    - vendor
+
+linters:
+  enable:
+    - typecheck

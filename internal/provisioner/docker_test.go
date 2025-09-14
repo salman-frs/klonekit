@@ -19,11 +19,7 @@ import (
 
 // MockContainerRuntime is a mock implementation of the ContainerRuntime interface
 type MockContainerRuntime struct {
-	*mock.Mock
-}
-
-func NewMockContainerRuntime() *MockContainerRuntime {
-	return &MockContainerRuntime{Mock: &mock.Mock{}}
+	mock.Mock
 }
 
 func (m *MockContainerRuntime) PullImage(ctx context.Context, image string) error {
@@ -117,7 +113,7 @@ func TestTerraformDockerProvisioner_WithMock(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create mock runtime
-			mockRuntime := NewMockContainerRuntime()
+			mockRuntime := new(MockContainerRuntime)
 			tt.setupMock(mockRuntime)
 
 			// Create provisioner with mock
