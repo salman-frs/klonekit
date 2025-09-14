@@ -15,9 +15,13 @@ import (
 	"klonekit/internal/scm"
 )
 
+// version is set at build time via ldflags
+var version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "klonekit",
-	Short: "KloneKit - Infrastructure provisioning and GitLab project setup tool",
+	Use:     "klonekit",
+	Short:   "KloneKit - Infrastructure provisioning and GitLab project setup tool",
+	Version: version,
 	Long: `KloneKit is a CLI tool that helps DevOps engineers provision infrastructure
 and set up GitLab projects using blueprint configurations.`,
 }
