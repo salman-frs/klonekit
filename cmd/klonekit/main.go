@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"klonekit/internal/app"
+	"klonekit/internal/errors"
 	"klonekit/internal/parser"
 	"klonekit/internal/provisioner"
 	"klonekit/internal/runtime"
@@ -35,7 +36,12 @@ func getFileFlag(cmd *cobra.Command) (string, error) {
 	// Try to auto-detect blueprint file
 	autoDetected := findBlueprintFile()
 	if autoDetected == "" {
-		return "", fmt.Errorf("no blueprint file found. Please specify a file with -f flag or create klonekit.yml/klonekit.yaml in the current directory")
+		return "", errors.NewBlueprintError(
+			"Failed to locate blueprint file",
+			"No klonekit.yml or klonekit.yaml file found in current directory",
+			"Create a blueprint file (klonekit.yml or klonekit.yaml) or specify one with -f flag",
+			fmt.Errorf("no blueprint file found in current directory"),
+		)
 	}
 
 	return autoDetected, nil
@@ -62,7 +68,7 @@ This orchestrates all individual commands (scaffold, scm, provision) in the corr
 	Run: func(cmd *cobra.Command, args []string) {
 		file, err := getFileFlag(cmd)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -72,7 +78,7 @@ This orchestrates all individual commands (scaffold, scm, provision) in the corr
 
 		// Execute the complete workflow via app orchestrator
 		if err := app.Apply(file, dryRun, retainState, autoApprove); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 	},
@@ -86,7 +92,7 @@ of Terraform files locally for verification before infrastructure creation.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		file, err := getFileFlag(cmd)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -95,7 +101,7 @@ of Terraform files locally for verification before infrastructure creation.`,
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -103,7 +109,7 @@ of Terraform files locally for verification before infrastructure creation.`,
 		fmt.Printf("Scaffolding blueprint: %s\n", blueprint.Metadata.Name)
 
 		if err := scaffolder.Scaffold(&blueprint.Spec, dryRun); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -123,14 +129,14 @@ GitLab repository using the GitLab API and git operations.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		file, err := getFileFlag(cmd)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -139,12 +145,12 @@ GitLab repository using the GitLab API and git operations.`,
 
 		provider, err := scm.NewGitLabProvider()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
 		if err := provider.CreateRepo(&blueprint.Spec); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -161,7 +167,7 @@ and isolated environment for infrastructure provisioning.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		file, err := getFileFlag(cmd)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -170,7 +176,7 @@ and isolated environment for infrastructure provisioning.`,
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -180,7 +186,7 @@ and isolated environment for infrastructure provisioning.`,
 		// Create Docker runtime instance
 		dockerRuntime, err := runtime.NewDockerRuntime()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating Docker runtime: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -188,7 +194,7 @@ and isolated environment for infrastructure provisioning.`,
 		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
 
 		if err := terraformProvisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			errors.HandleError(err)
 			os.Exit(1)
 		}
 
@@ -221,7 +227,7 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errors.HandleError(err)
 		os.Exit(1)
 	}
 }
