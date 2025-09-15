@@ -27,7 +27,7 @@ const (
 
 // Apply orchestrates the complete KloneKit workflow using a stateful execution engine.
 // This function implements the Facade pattern over all internal components with resume capability.
-func Apply(blueprintPath string, isDryRun bool, retainState bool) error {
+func Apply(blueprintPath string, isDryRun bool, retainState bool, autoApprove bool) error {
 	slog.Info("Starting KloneKit apply workflow", "blueprintPath", blueprintPath, "dryRun", isDryRun)
 
 	// Load existing state or create new state
@@ -109,7 +109,7 @@ func Apply(blueprintPath string, isDryRun bool, retainState bool) error {
 	// Stage 3: Infrastructure Provisioning
 	if !state.shouldSkipStage(StageProvision) {
 		fmt.Printf("%s🏗️  Stage 3: Provisioning infrastructure%s\n", ColorRed, ColorReset)
-		if err := executeProvisionStage(blueprint, isDryRun); err != nil {
+		if err := executeProvisionStage(blueprint, isDryRun, autoApprove); err != nil {
 			return fmt.Errorf("provisioning stage failed: %w", err)
 		}
 
@@ -199,13 +199,18 @@ func executeSCMStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 }
 
 // executeProvisionStage handles the infrastructure provisioning stage of the workflow
-func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
+func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool, autoApprove bool) error {
 	if isDryRun {
 		fmt.Printf("%s🔍 DRY RUN: Would pull Terraform Docker image%s\n", ColorYellow, ColorReset)
 		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform init' in container%s\n", ColorYellow, ColorReset)
-		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform apply -auto-approve' in container%s\n", ColorYellow, ColorReset)
-		fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure in %s region%s\n",
-			ColorYellow, blueprint.Spec.Cloud.Region, ColorReset)
+		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform plan' in container%s\n", ColorYellow, ColorReset)
+		if autoApprove {
+			fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform apply -auto-approve' in container%s\n", ColorYellow, ColorReset)
+			fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure in %s region%s\n",
+				ColorYellow, blueprint.Spec.Cloud.Region, ColorReset)
+		} else {
+			fmt.Printf("%s🔍 DRY RUN: Would validate infrastructure (no apply without --auto-approve)%s\n", ColorYellow, ColorReset)
+		}
 	} else {
 		// Create Docker runtime instance
 		dockerRuntime, err := runtime.NewDockerRuntime()
@@ -216,15 +221,17 @@ func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool) error 
 		// Create provisioner with the runtime
 		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
 
-		if err := terraformProvisioner.Provision(&blueprint.Spec); err != nil {
+		if err := terraformProvisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
 			return fmt.Errorf("infrastructure provisioning failed: %w", err)
 		}
 	}
 
 	if isDryRun {
 		fmt.Printf("%s✅ Provisioning simulation completed successfully%s\n", ColorGreen, ColorReset)
-	} else {
+	} else if autoApprove {
 		fmt.Printf("%s✅ Infrastructure provisioned successfully in %s%s\n", ColorGreen, blueprint.Spec.Cloud.Region, ColorReset)
+	} else {
+		fmt.Printf("%s✅ Infrastructure validated successfully (use --auto-approve to provision)%s\n", ColorGreen, ColorReset)
 	}
 	slog.Info("Provisioning stage completed successfully", "region", blueprint.Spec.Cloud.Region, "dryRun", isDryRun)
 	return nil

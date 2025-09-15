@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -19,9 +22,9 @@ type DockerRuntime struct {
 	client *client.Client
 }
 
-// NewDockerRuntime creates a new DockerRuntime instance using client.FromEnv.
+// NewDockerRuntime creates a new DockerRuntime instance with dynamic socket detection.
 func NewDockerRuntime() (*DockerRuntime, error) {
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	dockerClient, err := createDockerClientWithDynamicSocket()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
@@ -36,6 +39,108 @@ func NewDockerRuntime() (*DockerRuntime, error) {
 	return &DockerRuntime{
 		client: dockerClient,
 	}, nil
+}
+
+// createDockerClientWithDynamicSocket creates a Docker client with dynamic socket detection.
+// It tries multiple socket locations in order of preference for different Docker setups.
+func createDockerClientWithDynamicSocket() (*client.Client, error) {
+	// Define potential Docker socket locations in order of preference
+	socketPaths := getDockerSocketPaths()
+
+	var lastErr error
+
+	// Try each socket path
+	for _, socketPath := range socketPaths {
+		slog.Debug("Attempting to connect to Docker socket", "path", socketPath)
+
+		// Check if socket exists
+		if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+			slog.Debug("Docker socket not found", "path", socketPath)
+			continue
+		}
+
+		// Try to create client with this socket
+		dockerClient, err := client.NewClientWithOpts(
+			client.WithHost("unix://"+socketPath),
+			client.WithAPIVersionNegotiation(),
+		)
+		if err != nil {
+			lastErr = err
+			slog.Debug("Failed to create Docker client", "path", socketPath, "error", err)
+			continue
+		}
+
+		// Test the connection
+		ctx := context.Background()
+		_, err = dockerClient.Ping(ctx)
+		if err != nil {
+			lastErr = err
+			slog.Debug("Failed to ping Docker daemon", "path", socketPath, "error", err)
+			dockerClient.Close()
+			continue
+		}
+
+		slog.Info("Successfully connected to Docker daemon", "socketPath", socketPath)
+		return dockerClient, nil
+	}
+
+	// If all socket paths failed, try the default FromEnv approach
+	slog.Debug("All socket paths failed, trying environment-based configuration")
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client with all methods: last error was %w", lastErr)
+	}
+
+	// Test the environment-based client
+	ctx := context.Background()
+	_, err = dockerClient.Ping(ctx)
+	if err != nil {
+		dockerClient.Close()
+		return nil, fmt.Errorf("failed to connect to Docker daemon with all methods: last error was %w", err)
+	}
+
+	slog.Info("Successfully connected to Docker daemon using environment configuration")
+	return dockerClient, nil
+}
+
+// getDockerSocketPaths returns a list of potential Docker socket paths in order of preference.
+func getDockerSocketPaths() []string {
+	var socketPaths []string
+
+	// Get home directory for user-specific paths
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		if currentUser := os.Getenv("USER"); currentUser != "" {
+			homeDir = filepath.Join("/Users", currentUser)
+		}
+	}
+
+	// Colima (macOS alternative to Docker Desktop)
+	if homeDir != "" {
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".colima", "docker.sock"))
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".colima", "default", "docker.sock"))
+	}
+
+	// Docker Desktop (macOS/Windows)
+	if homeDir != "" {
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".docker", "run", "docker.sock"))
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".docker", "desktop", "docker.sock"))
+	}
+
+	// Podman Desktop compatibility
+	if homeDir != "" {
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".local", "share", "containers", "podman", "machine", "podman.sock"))
+	}
+
+	// Standard Docker daemon socket (Linux/Docker CE)
+	socketPaths = append(socketPaths, "/var/run/docker.sock")
+
+	// Lima (another Docker alternative)
+	if homeDir != "" {
+		socketPaths = append(socketPaths, filepath.Join(homeDir, ".lima", "docker", "sock", "docker.sock"))
+	}
+
+	return socketPaths
 }
 
 // PullImage pulls a Docker image.
@@ -87,7 +192,10 @@ func (d *DockerRuntime) RunContainer(ctx context.Context, opts runtime.RunOption
 	}
 
 	hostConfig := &container.HostConfig{
-		Mounts: mounts,
+		Mounts:      mounts,
+		NetworkMode: "default", // Use default Docker network for internet access
+		DNS:         []string{"8.8.8.8", "8.8.4.4"}, // Add public DNS servers
+		DNSOptions:  []string{"ndots:0"}, // Improve DNS resolution performance
 	}
 
 	// Create container
@@ -122,6 +230,8 @@ type containerReader struct {
 	ctx         context.Context
 	reader      io.ReadCloser
 	closed      bool
+	exitCode    int64
+	exitError   error
 }
 
 // Read reads from the container output.
@@ -154,16 +264,42 @@ func (cr *containerReader) Close() error {
 		cr.reader.Close()
 	}
 
-	// Wait for container to finish
-	if _, err := cr.client.ContainerWait(cr.ctx, cr.containerID, container.WaitConditionNotRunning); err != nil {
-		slog.Error("Failed to wait for container", "containerID", cr.containerID, "error", err)
+	// Wait for container to finish (with timeout to avoid hanging)
+	waitCtx, cancel := context.WithTimeout(cr.ctx, 30*time.Second)
+	defer cancel()
+
+	statusCh, errCh := cr.client.ContainerWait(waitCtx, cr.containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			cr.exitError = err
+			slog.Debug("Container wait completed with warning", "containerID", cr.containerID, "warning", err.Error())
+		}
+	case status := <-statusCh:
+		// Container finished, capture exit code
+		cr.exitCode = status.StatusCode
+		if status.StatusCode != 0 {
+			cr.exitError = fmt.Errorf("container exited with non-zero status: %d", status.StatusCode)
+			slog.Debug("Container failed", "containerID", cr.containerID, "exitCode", status.StatusCode)
+		} else {
+			slog.Debug("Container finished successfully", "containerID", cr.containerID)
+		}
+	case <-waitCtx.Done():
+		// Timeout reached
+		cr.exitError = fmt.Errorf("container wait timeout")
+		slog.Debug("Container wait timeout", "containerID", cr.containerID)
 	}
 
-	// Remove container
-	if err := cr.client.ContainerRemove(cr.ctx, cr.containerID, container.RemoveOptions{Force: true}); err != nil {
-		slog.Error("Failed to remove container", "containerID", cr.containerID, "error", err)
-		return err
+	// Remove container - use a fresh context in case the original was cancelled
+	removeCtx, removeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer removeCancel()
+
+	if err := cr.client.ContainerRemove(removeCtx, cr.containerID, container.RemoveOptions{Force: true}); err != nil {
+		// Log as debug instead of error - container cleanup is best effort
+		slog.Debug("Container cleanup completed with warning", "containerID", cr.containerID, "warning", err.Error())
+		// Don't return the error - container cleanup is best effort
 	}
 
-	return nil
+	// Return the exit error if the container failed
+	return cr.exitError
 }

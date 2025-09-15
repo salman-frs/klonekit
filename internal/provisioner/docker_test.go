@@ -164,7 +164,7 @@ func TestTerraformDockerProvisioner_WithMock(t *testing.T) {
 			// Create provisioner with mock
 			provisioner := NewTerraformDockerProvisioner(mockRuntime)
 
-			err := provisioner.Provision(tt.spec)
+			err := provisioner.Provision(tt.spec, true) // Use auto-approve for tests
 
 			if tt.expectError {
 				if err == nil {
@@ -220,7 +220,7 @@ func TestTerraformDockerProvisioner_Basic(t *testing.T) {
 			// Create provisioner
 			provisioner := NewTerraformDockerProvisioner(dockerRuntime)
 
-			err = provisioner.Provision(tt.spec)
+			err = provisioner.Provision(tt.spec, true) // Use auto-approve for tests
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
@@ -326,7 +326,7 @@ provider "aws" {
 		},
 	}
 
-	err = provisioner.Provision(spec)
+	err = provisioner.Provision(spec, true) // Use auto-approve for tests
 	// We expect this to fail due to AWS credentials or other infrastructure issues
 	// But it should not fail due to Docker connectivity issues
 	if err != nil && strings.Contains(err.Error(), "failed to create Docker") {

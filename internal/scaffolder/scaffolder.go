@@ -41,7 +41,7 @@ func Scaffold(spec *blueprint.Spec, isDryRun bool) error {
 	}
 
 	// Generate terraform.tfvars.json file
-	if err := generateTerraformVars(spec.Variables, destPath); err != nil {
+	if err := generateTerraformVars(spec, destPath); err != nil {
 		return fmt.Errorf("failed to generate terraform.tfvars.json: %w", err)
 	}
 
@@ -83,9 +83,11 @@ func performDryRun(spec *blueprint.Spec) error {
 	tfvarsPath := filepath.Join(destPath, "terraform.tfvars.json")
 	fmt.Printf("DRY RUN: Would create file: %s\n", tfvarsPath)
 
-	if len(spec.Variables) > 0 {
+	// Use only user-defined variables
+	allVars := spec.Variables
+	if len(allVars) > 0 {
 		fmt.Println("DRY RUN: terraform.tfvars.json content would be:")
-		if jsonBytes, err := json.MarshalIndent(spec.Variables, "", "  "); err == nil {
+		if jsonBytes, err := json.MarshalIndent(allVars, "", "  "); err == nil {
 			fmt.Println(string(jsonBytes))
 		}
 	}
@@ -144,14 +146,17 @@ func copyFile(src, dst string) error {
 }
 
 // generateTerraformVars creates a terraform.tfvars.json file with the variables from the blueprint.
-func generateTerraformVars(variables map[string]interface{}, destPath string) error {
-	if len(variables) == 0 {
+func generateTerraformVars(spec *blueprint.Spec, destPath string) error {
+	// Use only user-defined variables
+	allVars := spec.Variables
+
+	if len(allVars) == 0 {
 		return nil
 	}
 
 	tfvarsPath := filepath.Join(destPath, "terraform.tfvars.json")
 
-	jsonBytes, err := json.MarshalIndent(variables, "", "  ")
+	jsonBytes, err := json.MarshalIndent(allVars, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal variables to JSON: %w", err)
 	}
@@ -162,3 +167,4 @@ func generateTerraformVars(variables map[string]interface{}, destPath string) er
 
 	return nil
 }
+

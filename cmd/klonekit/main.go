@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -14,6 +13,33 @@ import (
 	"klonekit/internal/scaffolder"
 	"klonekit/internal/scm"
 )
+
+// findBlueprintFile searches for klonekit.yml or klonekit.yaml in the current directory
+func findBlueprintFile() string {
+	files := []string{"klonekit.yml", "klonekit.yaml"}
+	for _, file := range files {
+		if _, err := os.Stat(file); err == nil {
+			return file
+		}
+	}
+	return ""
+}
+
+// getFileFlag gets the file flag value, falling back to auto-detection if not provided
+func getFileFlag(cmd *cobra.Command) (string, error) {
+	file, _ := cmd.Flags().GetString("file")
+	if file != "" {
+		return file, nil
+	}
+
+	// Try to auto-detect blueprint file
+	autoDetected := findBlueprintFile()
+	if autoDetected == "" {
+		return "", fmt.Errorf("no blueprint file found. Please specify a file with -f flag or create klonekit.yml/klonekit.yaml in the current directory")
+	}
+
+	return autoDetected, nil
+}
 
 // version is set at build time via ldflags
 var version = "dev"
@@ -34,17 +60,18 @@ creating GitLab repositories, and provisioning infrastructure - all from a singl
 
 This orchestrates all individual commands (scaffold, scm, provision) in the correct sequence.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		file, _ := cmd.Flags().GetString("file")
-		if file == "" {
-			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+		file, err := getFileFlag(cmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		retainState, _ := cmd.Flags().GetBool("retain-state")
+		autoApprove, _ := cmd.Flags().GetBool("auto-approve")
 
 		// Execute the complete workflow via app orchestrator
-		if err := app.Apply(file, dryRun, retainState); err != nil {
+		if err := app.Apply(file, dryRun, retainState, autoApprove); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
@@ -57,9 +84,9 @@ var scaffoldCmd = &cobra.Command{
 	Long: `Scaffold processes a blueprint YAML file and generates the complete set
 of Terraform files locally for verification before infrastructure creation.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		file, _ := cmd.Flags().GetString("file")
-		if file == "" {
-			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+		file, err := getFileFlag(cmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
@@ -94,9 +121,9 @@ var scmCmd = &cobra.Command{
 	Long: `SCM processes a scaffolded project directory and publishes it to a new
 GitLab repository using the GitLab API and git operations.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		file, _ := cmd.Flags().GetString("file")
-		if file == "" {
-			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+		file, err := getFileFlag(cmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
@@ -132,11 +159,13 @@ var provisionCmd = &cobra.Command{
 infrastructure defined in the scaffolded Terraform files. This ensures a consistent
 and isolated environment for infrastructure provisioning.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		file, _ := cmd.Flags().GetString("file")
-		if file == "" {
-			fmt.Fprintln(os.Stderr, "Error: --file flag is required")
+		file, err := getFileFlag(cmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
+
+		autoApprove, _ := cmd.Flags().GetBool("auto-approve")
 
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)
@@ -158,41 +187,35 @@ and isolated environment for infrastructure provisioning.`,
 		// Create provisioner with the runtime
 		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
 
-		if err := terraformProvisioner.Provision(&blueprint.Spec); err != nil {
+		if err := terraformProvisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Successfully provisioned infrastructure for: %s\n", blueprint.Metadata.Name)
+		if autoApprove {
+			fmt.Printf("Successfully provisioned infrastructure for: %s\n", blueprint.Metadata.Name)
+		} else {
+			fmt.Printf("Successfully validated infrastructure for: %s (use --auto-approve to provision)\n", blueprint.Metadata.Name)
+		}
 	},
 }
 
 func init() {
-	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	applyCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (auto-detects klonekit.yml/klonekit.yaml if not specified)")
 	applyCmd.Flags().Bool("dry-run", false, "Simulate the workflow without making any changes")
 	applyCmd.Flags().Bool("retain-state", false, "Keep the state file after successful completion for auditing purposes")
-	if err := applyCmd.MarkFlagRequired("file"); err != nil {
-		slog.Error("Failed to mark file flag as required for apply command", "error", err)
-	}
+	applyCmd.Flags().Bool("auto-approve", false, "Automatically approve terraform apply without prompting")
 	rootCmd.AddCommand(applyCmd)
 
-	scaffoldCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
+	scaffoldCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (auto-detects klonekit.yml/klonekit.yaml if not specified)")
 	scaffoldCmd.Flags().Bool("dry-run", false, "Print files that would be created without actually writing them")
-	if err := scaffoldCmd.MarkFlagRequired("file"); err != nil {
-		slog.Error("Failed to mark file flag as required for scaffold command", "error", err)
-	}
 	rootCmd.AddCommand(scaffoldCmd)
 
-	scmCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
-	if err := scmCmd.MarkFlagRequired("file"); err != nil {
-		slog.Error("Failed to mark file flag as required for scm command", "error", err)
-	}
+	scmCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (auto-detects klonekit.yml/klonekit.yaml if not specified)")
 	rootCmd.AddCommand(scmCmd)
 
-	provisionCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (required)")
-	if err := provisionCmd.MarkFlagRequired("file"); err != nil {
-		slog.Error("Failed to mark file flag as required for provision command", "error", err)
-	}
+	provisionCmd.Flags().StringP("file", "f", "", "Path to the blueprint YAML file (auto-detects klonekit.yml/klonekit.yaml if not specified)")
+	provisionCmd.Flags().Bool("auto-approve", false, "Automatically approve terraform apply without prompting")
 	rootCmd.AddCommand(provisionCmd)
 }
 

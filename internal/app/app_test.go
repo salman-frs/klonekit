@@ -93,7 +93,7 @@ spec:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Apply(blueprintFile, tt.isDryRun, false)
+			err := Apply(blueprintFile, tt.isDryRun, false, false)
 
 			if tt.expectError {
 				if err == nil {
@@ -140,7 +140,7 @@ func TestApply_InvalidBlueprint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Apply(tt.blueprintPath, false, false)
+			err := Apply(tt.blueprintPath, false, false, false)
 
 			if tt.expectError {
 				if err == nil {
@@ -245,7 +245,7 @@ spec:
 	}
 
 	// This should fail at scaffolding stage
-	err = Apply(blueprintFile, false, false)
+	err = Apply(blueprintFile, false, false, false)
 	if err == nil {
 		t.Error("Expected error due to invalid source directory, but got none")
 		return
@@ -329,7 +329,7 @@ func TestApply_FullWorkflowDryRun(t *testing.T) {
 	}
 
 	// Execute full workflow in dry-run mode
-	err = Apply(blueprintFile, true, false)
+	err = Apply(blueprintFile, true, false, false)
 	if err != nil {
 		t.Errorf("Unexpected error in dry-run mode: %s", err)
 	}
@@ -367,7 +367,7 @@ func TestApply_StatefulExecution_FailureAfterScaffold(t *testing.T) {
 
 	// First run: This will fail at SCM stage (expected due to invalid GitLab credentials)
 	// But scaffolding should succeed and be saved to state
-	err = Apply(blueprintFile, false, false)
+	err = Apply(blueprintFile, false, false, false)
 	if err == nil {
 		t.Error("Expected error due to invalid GitLab credentials, but got none")
 		return
@@ -456,7 +456,7 @@ func TestApply_StatefulExecution_ResumeFromSCM(t *testing.T) {
 	}
 
 	// Run apply in dry-run mode - should resume from SCM stage
-	err = Apply(blueprintFile, true, false) // Using dry-run to avoid actual GitLab operations
+	err = Apply(blueprintFile, true, false, false) // Using dry-run to avoid actual GitLab operations
 	if err != nil {
 		t.Errorf("Unexpected error during resume in dry-run mode: %s", err)
 	}
@@ -506,7 +506,7 @@ func TestApply_StatefulExecution_DryRunWithState(t *testing.T) {
 	}
 
 	// Run dry-run - should simulate resume from provision stage
-	err = Apply(blueprintFile, true, false)
+	err = Apply(blueprintFile, true, false, false)
 	if err != nil {
 		t.Errorf("Unexpected error during dry-run with existing state: %s", err)
 	}
@@ -552,7 +552,7 @@ func TestApply_RetainStateFlag(t *testing.T) {
 	}
 
 	// Test with retain-state=true in dry-run mode (to avoid GitLab API calls)
-	err = Apply(blueprintFile, true, true)
+	err = Apply(blueprintFile, true, true, false)
 	if err != nil {
 		t.Errorf("Unexpected error with retain-state in dry-run: %s", err)
 	}
@@ -572,7 +572,7 @@ func TestApply_RetainStateFlag(t *testing.T) {
 	}
 
 	// Run with retain-state=false - this should remove the state file
-	err = Apply(blueprintFile, true, false) // Using dry-run to avoid actual operations
+	err = Apply(blueprintFile, true, false, false) // Using dry-run to avoid actual operations
 	if err != nil {
 		t.Errorf("Unexpected error with retain-state=false: %s", err)
 	}
