@@ -14,10 +14,6 @@ import (
 	"klonekit/pkg/blueprint"
 )
 
-// ScmProvider defines the interface for source control management operations.
-type ScmProvider interface {
-	CreateRepo(spec *blueprint.Spec) error
-}
 
 // GitLabProvider implements the ScmProvider interface for GitLab.
 type GitLabProvider struct {
