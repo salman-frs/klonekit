@@ -20,6 +20,76 @@ import (
 	runtimePkg "klonekit/pkg/runtime"
 )
 
+// TestCopyFile tests the copyFile function
+func TestCopyFile(t *testing.T) {
+	// Create temporary source file
+	srcFile, err := os.CreateTemp("", "test-src-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp source file: %v", err)
+	}
+	defer os.Remove(srcFile.Name())
+
+	testContent := "test content for copy"
+	if _, err := srcFile.WriteString(testContent); err != nil {
+		t.Fatalf("Failed to write test content: %v", err)
+	}
+	srcFile.Close()
+
+	// Create temporary destination path
+	dstFile, err := os.CreateTemp("", "test-dst-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp destination file: %v", err)
+	}
+	dstPath := dstFile.Name()
+	dstFile.Close()
+	os.Remove(dstPath) // Remove so copyFile can create it
+
+	// Test successful copy
+	err = copyFile(srcFile.Name(), dstPath)
+	if err != nil {
+		t.Errorf("copyFile failed: %v", err)
+	}
+
+	// Verify content was copied
+	content, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Errorf("Failed to read destination file: %v", err)
+	}
+
+	if string(content) != testContent {
+		t.Errorf("Content mismatch. Expected %s, got %s", testContent, string(content))
+	}
+
+	// Clean up
+	os.Remove(dstPath)
+
+	// Test error cases
+	err = copyFile("non-existent-file", dstPath)
+	if err == nil {
+		t.Error("Expected error when copying non-existent file")
+	}
+}
+
+// TestCleanDockerLogLine tests the cleanDockerLogLine function
+func TestCleanDockerLogLine(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"[0m[1mhello[0m", "hello"},
+		{"regular text", "regular text"},
+		{"", ""},
+		{"[31mError:[0m Something went wrong", "Error: Something went wrong"},
+	}
+
+	for _, tt := range tests {
+		result := cleanDockerLogLine(tt.input)
+		if result != tt.expected {
+			t.Errorf("cleanDockerLogLine(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
 // TestMain sets up mock AWS credentials for testing
 func TestMain(m *testing.M) {
 	// Create temporary AWS credentials directory

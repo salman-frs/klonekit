@@ -126,8 +126,25 @@ func (p *TerraformDockerProvisioner) backupStateFile(scaffoldDir string) error {
 	return nil
 }
 
+// validatePath ensures the path is safe and doesn't contain directory traversal sequences
+func validatePath(path string) error {
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path contains directory traversal: %s", path)
+	}
+	return nil
+}
+
 // copyFile copies a file from src to dst.
 func copyFile(src, dst string) error {
+	// Validate paths to prevent directory traversal
+	if err := validatePath(src); err != nil {
+		return fmt.Errorf("invalid source path: %w", err)
+	}
+	if err := validatePath(dst); err != nil {
+		return fmt.Errorf("invalid destination path: %w", err)
+	}
+
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
@@ -241,6 +258,9 @@ func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, sc
 // ansiRegex is a compiled regex for ANSI escape sequences
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
+// bracketRegex is a compiled regex for bracket-only color codes (Docker log format)
+var bracketRegex = regexp.MustCompile(`\[[0-9;]*[a-zA-Z]`)
+
 // cleanDockerLogLine removes Docker log headers, ANSI escape sequences, and filters out binary/control characters.
 func cleanDockerLogLine(line string) string {
 	// Skip empty lines
@@ -263,6 +283,9 @@ func cleanDockerLogLine(line string) string {
 
 	// Remove ANSI escape sequences (colors, formatting, etc.)
 	line = ansiRegex.ReplaceAllString(line, "")
+
+	// Remove bracket-only color codes (common in Docker logs)
+	line = bracketRegex.ReplaceAllString(line, "")
 
 	// Remove common control characters
 	line = strings.ReplaceAll(line, "\x00", "")

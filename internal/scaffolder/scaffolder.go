@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"klonekit/pkg/blueprint"
 )
@@ -31,7 +32,7 @@ func Scaffold(spec *blueprint.Spec, isDryRun bool) error {
 	}
 
 	// Create destination directory
-	if err := os.MkdirAll(destPath, 0755); err != nil {
+	if err := os.MkdirAll(destPath, 0750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
@@ -110,15 +111,32 @@ func copyDirectory(src, dst string) error {
 		destPath := filepath.Join(dst, relPath)
 
 		if d.IsDir() {
-			return os.MkdirAll(destPath, 0755)
+			return os.MkdirAll(destPath, 0750)
 		}
 
 		return copyFile(path, destPath)
 	})
 }
 
+// validatePath ensures the path is safe and doesn't contain directory traversal sequences
+func validatePath(path string) error {
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path contains directory traversal: %s", path)
+	}
+	return nil
+}
+
 // copyFile copies a single file from src to dst.
 func copyFile(src, dst string) error {
+	// Validate paths to prevent directory traversal
+	if err := validatePath(src); err != nil {
+		return fmt.Errorf("invalid source path: %w", err)
+	}
+	if err := validatePath(dst); err != nil {
+		return fmt.Errorf("invalid destination path: %w", err)
+	}
+
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
@@ -161,7 +179,7 @@ func generateTerraformVars(spec *blueprint.Spec, destPath string) error {
 		return fmt.Errorf("failed to marshal variables to JSON: %w", err)
 	}
 
-	if err := os.WriteFile(tfvarsPath, jsonBytes, 0644); err != nil {
+	if err := os.WriteFile(tfvarsPath, jsonBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write terraform.tfvars.json: %w", err)
 	}
 

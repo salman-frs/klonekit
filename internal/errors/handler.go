@@ -75,12 +75,16 @@ func createLogDirectoryWithFallback() (string, bool, error) {
 	// Try OS-standard directory first
 	logDir, err := getOSStandardLogDir()
 	if err == nil {
-		if err := os.MkdirAll(logDir, 0755); err == nil {
+		if err := os.MkdirAll(logDir, 0750); err == nil {
 			// Check if we can write to the directory
 			testFile := filepath.Join(logDir, ".test_write")
 			if f, testErr := os.Create(testFile); testErr == nil {
-				f.Close()
-				os.Remove(testFile)
+				if err := f.Close(); err != nil {
+					slog.Warn("Failed to close test file", "path", testFile, "error", err)
+				}
+				if err := os.Remove(testFile); err != nil {
+					slog.Warn("Failed to remove test file", "path", testFile, "error", err)
+				}
 				return logDir, fallbackUsed, nil
 			}
 		}
@@ -115,12 +119,16 @@ func rotateLogFile(logPath string) error {
 		if i == maxFiles-1 {
 			// Remove the oldest file
 			if _, err := os.Stat(oldPath); err == nil {
-				os.Remove(oldPath)
+				if err := os.Remove(oldPath); err != nil {
+					slog.Warn("Failed to remove old log file", "path", oldPath, "error", err)
+				}
 			}
 		} else {
 			// Rotate file
 			if _, err := os.Stat(oldPath); err == nil {
-				os.Rename(oldPath, newPath)
+				if err := os.Rename(oldPath, newPath); err != nil {
+					slog.Warn("Failed to rotate log file", "old", oldPath, "new", newPath, "error", err)
+				}
 			}
 		}
 	}
@@ -165,7 +173,7 @@ func createLogFile() (*os.File, error) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to rotate log file: %v\n", err)
 	}
 
-	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 }
 
 func (h *ErrorHandler) Handle(err error) {

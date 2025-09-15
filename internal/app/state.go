@@ -62,7 +62,7 @@ func saveState(state *ExecutionState) error {
 		return fmt.Errorf("failed to serialize state: %w", err)
 	}
 
-	if err := os.WriteFile(StateFileName, data, 0644); err != nil {
+	if err := os.WriteFile(StateFileName, data, 0600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 

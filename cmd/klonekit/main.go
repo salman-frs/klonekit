@@ -28,7 +28,10 @@ func findBlueprintFile() string {
 
 // getFileFlag gets the file flag value, falling back to auto-detection if not provided
 func getFileFlag(cmd *cobra.Command) (string, error) {
-	file, _ := cmd.Flags().GetString("file")
+	file, err := cmd.Flags().GetString("file")
+	if err != nil {
+		return "", fmt.Errorf("failed to get file flag: %w", err)
+	}
 	if file != "" {
 		return file, nil
 	}
@@ -72,9 +75,21 @@ This orchestrates all individual commands (scaffold, scm, provision) in the corr
 			os.Exit(1)
 		}
 
-		dryRun, _ := cmd.Flags().GetBool("dry-run")
-		retainState, _ := cmd.Flags().GetBool("retain-state")
-		autoApprove, _ := cmd.Flags().GetBool("auto-approve")
+		dryRun, err := cmd.Flags().GetBool("dry-run")
+		if err != nil {
+			errors.HandleError(fmt.Errorf("failed to get dry-run flag: %w", err))
+			os.Exit(1)
+		}
+		retainState, err := cmd.Flags().GetBool("retain-state")
+		if err != nil {
+			errors.HandleError(fmt.Errorf("failed to get retain-state flag: %w", err))
+			os.Exit(1)
+		}
+		autoApprove, err := cmd.Flags().GetBool("auto-approve")
+		if err != nil {
+			errors.HandleError(fmt.Errorf("failed to get auto-approve flag: %w", err))
+			os.Exit(1)
+		}
 
 		// Execute the complete workflow via app orchestrator
 		if err := app.Apply(file, dryRun, retainState, autoApprove); err != nil {
@@ -96,7 +111,11 @@ of Terraform files locally for verification before infrastructure creation.`,
 			os.Exit(1)
 		}
 
-		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		dryRun, err := cmd.Flags().GetBool("dry-run")
+		if err != nil {
+			errors.HandleError(fmt.Errorf("failed to get dry-run flag: %w", err))
+			os.Exit(1)
+		}
 
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)
@@ -171,7 +190,11 @@ and isolated environment for infrastructure provisioning.`,
 			os.Exit(1)
 		}
 
-		autoApprove, _ := cmd.Flags().GetBool("auto-approve")
+		autoApprove, err := cmd.Flags().GetBool("auto-approve")
+		if err != nil {
+			errors.HandleError(fmt.Errorf("failed to get auto-approve flag: %w", err))
+			os.Exit(1)
+		}
 
 		// Parse and validate the blueprint file
 		blueprint, err := parser.Parse(file)

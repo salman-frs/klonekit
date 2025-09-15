@@ -1,0 +1,43 @@
+{
+  "global": {
+    "nosec": false,
+    "audit": true
+  },
+  "rules": {
+    "G101": "true",
+    "G102": "true",
+    "G103": "true",
+    "G104": "true",
+    "G106": "true",
+    "G107": "true",
+    "G108": "true",
+    "G109": "true",
+    "G110": "true",
+    "G201": "true",
+    "G202": "true",
+    "G203": "true",
+    "G204": "true",
+    "G301": "true",
+    "G302": "true",
+    "G303": "true",
+    "G304": "true",
+    "G305": "true",
+    "G306": "true",
+    "G307": "true",
+    "G401": "true",
+    "G402": "true",
+    "G403": "true",
+    "G404": "true",
+    "G501": "true",
+    "G502": "true",
+    "G503": "true",
+    "G504": "true",
+    "G505": "true",
+    "G601": "true"
+  },
+  "exclude_generated": true,
+  "exclude_dirs": [
+    "vendor/",
+    ".git/"
+  ]
+}
