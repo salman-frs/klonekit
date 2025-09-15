@@ -198,8 +198,14 @@ func (d *DockerRuntime) RunContainer(ctx context.Context, opts runtime.RunOption
 		DNSOptions:  []string{"ndots:0"}, // Improve DNS resolution performance
 	}
 
-	// Create container
-	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
+	// Set container user if specified to avoid permission issues
+	if opts.User != "" {
+		containerConfig.User = opts.User
+	}
+
+	// Create container with optional name
+	containerName := opts.ContainerName
+	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -217,21 +223,23 @@ func (d *DockerRuntime) RunContainer(ctx context.Context, opts runtime.RunOption
 
 	// Create a reader that will automatically clean up the container when closed
 	return &containerReader{
-		client:      d.client,
-		containerID: containerID,
-		ctx:         ctx,
+		client:         d.client,
+		containerID:    containerID,
+		ctx:            ctx,
+		retainContainer: opts.RetainContainer,
 	}, nil
 }
 
 // containerReader wraps container output and handles cleanup.
 type containerReader struct {
-	client      *client.Client
-	containerID string
-	ctx         context.Context
-	reader      io.ReadCloser
-	closed      bool
-	exitCode    int64
-	exitError   error
+	client          *client.Client
+	containerID     string
+	ctx             context.Context
+	reader          io.ReadCloser
+	closed          bool
+	exitCode        int64
+	exitError       error
+	retainContainer bool // If true, don't remove container on close
 }
 
 // Read reads from the container output.
@@ -290,14 +298,20 @@ func (cr *containerReader) Close() error {
 		slog.Debug("Container wait timeout", "containerID", cr.containerID)
 	}
 
-	// Remove container - use a fresh context in case the original was cancelled
-	removeCtx, removeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer removeCancel()
+	// Remove container only if not retaining - use a fresh context in case the original was cancelled
+	if !cr.retainContainer {
+		removeCtx, removeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer removeCancel()
 
-	if err := cr.client.ContainerRemove(removeCtx, cr.containerID, container.RemoveOptions{Force: true}); err != nil {
-		// Log as debug instead of error - container cleanup is best effort
-		slog.Debug("Container cleanup completed with warning", "containerID", cr.containerID, "warning", err.Error())
-		// Don't return the error - container cleanup is best effort
+		if err := cr.client.ContainerRemove(removeCtx, cr.containerID, container.RemoveOptions{Force: true}); err != nil {
+			// Log as debug instead of error - container cleanup is best effort
+			slog.Debug("Container cleanup completed with warning", "containerID", cr.containerID, "warning", err.Error())
+			// Don't return the error - container cleanup is best effort
+		} else {
+			slog.Debug("Container removed successfully", "containerID", cr.containerID)
+		}
+	} else {
+		slog.Info("Container retained for state persistence", "containerID", cr.containerID)
 	}
 
 	// Return the exit error if the container failed

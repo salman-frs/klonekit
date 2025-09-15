@@ -13,6 +13,9 @@ type RunOptions struct {
 	VolumeMounts     map[string]string
 	EnvVars          map[string]string
 	WorkingDirectory string
+	User             string // User ID in format "uid:gid" (e.g., "1000:1000")
+	RetainContainer  bool   // If true, container will not be automatically removed after execution
+	ContainerName    string // Optional container name for reuse/management
 }
 
 // ContainerRuntime defines the contract for container operations.

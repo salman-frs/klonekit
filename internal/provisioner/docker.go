@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"klonekit/pkg/blueprint"
 	"klonekit/pkg/runtime"
@@ -31,12 +33,17 @@ type Provisioner interface {
 // TerraformDockerProvisioner implements the Provisioner interface using container runtime.
 type TerraformDockerProvisioner struct {
 	containerRuntime runtime.ContainerRuntime
+	containerName    string // Name for the persistent Terraform container
 }
 
 // NewTerraformDockerProvisioner creates a new TerraformDockerProvisioner.
 func NewTerraformDockerProvisioner(containerRuntime runtime.ContainerRuntime) *TerraformDockerProvisioner {
+	// Generate unique container name for this session
+	containerName := fmt.Sprintf("klonekit-terraform-%d", os.Getpid())
+
 	return &TerraformDockerProvisioner{
 		containerRuntime: containerRuntime,
+		containerName:    containerName,
 	}
 }
 
@@ -71,18 +78,24 @@ func (p *TerraformDockerProvisioner) Provision(spec *blueprint.Spec, autoApprove
 	}
 
 	// Execute Terraform init
-	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, "init"); err != nil {
+	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, false, "init"); err != nil {
 		return fmt.Errorf("terraform init failed: %w", err)
 	}
 
 	// Execute Terraform plan for validation
-	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, "plan"); err != nil {
+	if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, false, "plan"); err != nil {
 		return fmt.Errorf("terraform plan failed: %w", err)
 	}
 
 	// Only execute apply if auto-approve is enabled
 	if autoApprove {
-		if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, "apply", "-auto-approve"); err != nil {
+		// Backup state file before apply operation (critical for safety)
+		if err := p.backupStateFile(absScaffoldDir); err != nil {
+			slog.Warn("Failed to backup state file before apply", "error", err.Error())
+			// Continue anyway - backup failure shouldn't block apply
+		}
+
+		if err := p.runTerraformCommand(ctx, absScaffoldDir, awsCredsDir, spec.Cloud.Region, true, "apply", "-auto-approve"); err != nil {
 			return fmt.Errorf("terraform apply failed: %w", err)
 		}
 		slog.Info("Infrastructure provisioning completed successfully")
@@ -91,6 +104,58 @@ func (p *TerraformDockerProvisioner) Provision(spec *blueprint.Spec, autoApprove
 	}
 
 	return nil
+}
+
+// backupStateFile creates a backup of terraform.tfstate before critical operations.
+// This prevents permanent state loss in case of failures.
+func (p *TerraformDockerProvisioner) backupStateFile(scaffoldDir string) error {
+	stateFile := filepath.Join(scaffoldDir, "terraform.tfstate")
+
+	// Check if state file exists
+	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+		slog.Debug("No state file found to backup", "path", stateFile)
+		return nil // Not an error - might be first run
+	}
+
+	// Create backup with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	backupFile := filepath.Join(scaffoldDir, fmt.Sprintf("terraform.tfstate.backup.%s", timestamp))
+
+	// Copy state file to backup
+	if err := copyFile(stateFile, backupFile); err != nil {
+		return fmt.Errorf("failed to backup state file: %w", err)
+	}
+
+	slog.Info("State file backed up successfully", "backup", backupFile)
+	return nil
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
+}
+
+// getCurrentUserID returns the current user ID in format "uid:gid" for Docker containers.
+// This ensures files created by containers have the same ownership as the host user,
+// preventing permission issues during cleanup.
+func getCurrentUserID() string {
+	// In most cases, we can use os.Getuid() and os.Getgid()
+	uid := os.Getuid()
+	gid := os.Getgid()
+	return fmt.Sprintf("%d:%d", uid, gid)
 }
 
 // getAWSCredentialsDir returns the path to the user's AWS credentials directory.
@@ -120,7 +185,7 @@ func (p *TerraformDockerProvisioner) getAWSCredentialsDir() (string, error) {
 }
 
 // runTerraformCommand executes a Terraform command using the container runtime.
-func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, scaffoldDir, awsCredsDir, region string, args ...string) error {
+func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, scaffoldDir, awsCredsDir, region string, retainContainer bool, args ...string) error {
 	// Use args directly since the container's ENTRYPOINT is already 'terraform'
 	cmd := args
 
@@ -132,15 +197,18 @@ func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, sc
 		Command: cmd,
 		VolumeMounts: map[string]string{
 			scaffoldDir: WorkingDirectory,
-			awsCredsDir: "/root/.aws",
+			awsCredsDir: "/home/terraform/.aws", // Use non-root path for AWS credentials
 		},
 		EnvVars: map[string]string{
-			"AWS_SHARED_CREDENTIALS_FILE": "/root/.aws/credentials",
-			"AWS_CONFIG_FILE":             "/root/.aws/config",
+			"AWS_SHARED_CREDENTIALS_FILE": "/home/terraform/.aws/credentials",
+			"AWS_CONFIG_FILE":             "/home/terraform/.aws/config",
 			"AWS_DEFAULT_REGION":          region,
 			"AWS_REGION":                  region,
 		},
 		WorkingDirectory: WorkingDirectory,
+		User:             getCurrentUserID(),    // Run container as current user to avoid permission issues
+		RetainContainer:  retainContainer,      // Retain container for state persistence
+		ContainerName:    p.containerName,      // Use consistent container name
 	}
 
 	// Run the container
