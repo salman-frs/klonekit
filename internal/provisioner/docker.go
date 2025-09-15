@@ -242,7 +242,9 @@ func (p *TerraformDockerProvisioner) runTerraformCommand(ctx context.Context, sc
 	}
 
 	if err := scanner.Err(); err != nil {
-		reader.Close() // Best effort cleanup
+		if cerr := reader.Close(); cerr != nil {
+			slog.Debug("Error closing container output reader", "error", cerr)
+		}
 		return fmt.Errorf("error reading container output: %w", err)
 	}
 
