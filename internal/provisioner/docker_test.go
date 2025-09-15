@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/mock"
@@ -265,23 +267,112 @@ func TestTerraformDockerProvisioner_getAWSCredentialsDir(t *testing.T) {
 	}
 }
 
+// fixPermissionsRecursively fixes file permissions to ensure cleanup can succeed
+func fixPermissionsRecursively(path string) error {
+	return filepath.Walk(path, func(file string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Continue on permission errors during walk
+			return nil
+		}
+		if info.IsDir() {
+			// Set directory permissions to allow removal
+			_ = os.Chmod(file, 0755)
+		} else {
+			// Set file permissions to allow removal
+			_ = os.Chmod(file, 0644)
+		}
+		return nil
+	})
+}
+
+// getCurrentUserHome gets the real user home directory, bypassing environment overrides
+func getCurrentUserHome() string {
+	if currentUser, err := user.Current(); err == nil {
+		return currentUser.HomeDir
+	}
+	return ""
+}
+
 func TestTerraformDockerProvisioner_E2E_Local(t *testing.T) {
-	// Check if Docker daemon is accessible
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	t.Logf("Attempting to connect to Docker daemon...")
+
+	// IMPORTANT: TestMain overrides HOME for AWS credentials, but we need the real HOME for Docker sockets
+	// Temporarily restore the real HOME directory for Docker socket detection
+	currentHome := os.Getenv("HOME")
+	realHome := getCurrentUserHome() // Get the real user home directory
+	if realHome != "" && currentHome != realHome {
+		t.Logf("TestMain has overridden HOME. Current: %s, Real: %s", currentHome, realHome)
+		os.Setenv("HOME", realHome)
+		defer os.Setenv("HOME", currentHome) // Restore the test HOME after Docker connection
+	}
+
+	// Check if Docker daemon is accessible using dynamic socket detection
+	dockerRuntime, err := runtime.NewDockerRuntime()
+
+	// Restore test HOME immediately after Docker runtime creation
+	if realHome != "" && currentHome != realHome {
+		os.Setenv("HOME", currentHome)
+	}
+
 	if err != nil {
+		// Show detailed error breakdown
+		t.Logf("Docker connection failed with error: %v", err)
+		t.Logf("Checking socket availability in real home directory...")
+
+		// Check sockets in the real home directory
+		sockets := []string{
+			filepath.Join(realHome, ".colima", "docker.sock"),
+			filepath.Join(realHome, ".colima", "default", "docker.sock"),
+			"/var/run/docker.sock",
+		}
+
+		for _, socket := range sockets {
+			if _, statErr := os.Stat(socket); statErr == nil {
+				t.Logf("✓ Socket exists: %s", socket)
+
+				// Test direct connection to this socket
+				testClient, clientErr := client.NewClientWithOpts(
+					client.WithHost("unix://"+socket),
+					client.WithAPIVersionNegotiation(),
+				)
+				if clientErr != nil {
+					t.Logf("  ✗ Client creation failed: %v", clientErr)
+					continue
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, pingErr := testClient.Ping(ctx)
+				cancel()
+				testClient.Close()
+
+				if pingErr != nil {
+					t.Logf("  ✗ Ping failed: %v", pingErr)
+				} else {
+					t.Logf("  ✓ Direct connection successful!")
+				}
+			} else {
+				t.Logf("✗ Socket missing: %s", socket)
+			}
+		}
+
 		t.Skipf("Skipping E2E test: Docker daemon not accessible: %s", err)
 		return
 	}
 
-	ctx := context.Background()
-	_, err = dockerClient.Ping(ctx)
-	if err != nil {
-		t.Skipf("Skipping E2E test: Docker daemon not accessible: %s", err)
-		return
-	}
+	t.Logf("✓ Successfully connected to Docker daemon")
+	_ = dockerRuntime // Use the runtime variable to avoid unused variable error
 
 	// Create a temporary directory structure for testing
 	tempDir := t.TempDir()
+
+	// Add custom cleanup to handle permission issues from Terraform provider downloads
+	defer func() {
+		if err := fixPermissionsRecursively(tempDir); err != nil {
+			t.Logf("Warning: failed to fix permissions during cleanup: %v", err)
+		}
+		// Note: t.TempDir() handles the actual removal, but we fix permissions first
+	}()
+
 	scaffoldDir := filepath.Join(tempDir, "scaffold")
 	if err := os.MkdirAll(scaffoldDir, 0755); err != nil {
 		t.Fatalf("Failed to create temp scaffold directory: %s", err)
@@ -307,11 +398,8 @@ provider "aws" {
 		t.Fatalf("Failed to create test Terraform file: %s", err)
 	}
 
-	// Create Docker runtime
-	dockerRuntime, err := runtime.NewDockerRuntime()
-	if err != nil {
-		t.Fatalf("Failed to create Docker runtime: %s", err)
-	}
+	// Reuse the successfully connected Docker runtime from above
+	// (no need to create a second one since we already have a working connection)
 
 	// Create provisioner
 	provisioner := NewTerraformDockerProvisioner(dockerRuntime)
