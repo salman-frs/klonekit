@@ -5,13 +5,9 @@ run:
   tests: true
   issues-exit-code: 1
 
-issues:
-  exclude-dirs:
-    - vendor
-
 linters:
-  default: none  # v2 format - disable all linters by default
+  default: none
   enable:
-    - govet      # Go vet checks
-    - ineffassign # Detect ineffective assignments
-    - unused     # Check for unused code
+    - govet
+    - ineffassign
+    - unused
