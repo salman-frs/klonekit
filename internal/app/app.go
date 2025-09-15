@@ -6,10 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"klonekit/internal/parser"
-	"klonekit/internal/provisioner"
-	"klonekit/internal/runtime"
 	"klonekit/internal/scaffolder"
-	"klonekit/internal/scm"
 	"klonekit/pkg/blueprint"
 )
 
@@ -175,26 +172,27 @@ func executeScaffoldStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 // executeSCMStage handles the source control management stage of the workflow
 func executeSCMStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
 	if isDryRun {
-		fmt.Printf("%s🔍 DRY RUN: Would create GitLab repository '%s' in namespace '%s'%s\n",
-			ColorYellow, blueprint.Spec.SCM.Project.Name, blueprint.Spec.SCM.Project.Namespace, ColorReset)
+		fmt.Printf("%s🔍 DRY RUN: Would create %s repository '%s' in namespace '%s'%s\n",
+			ColorYellow, blueprint.Spec.SCM.Provider, blueprint.Spec.SCM.Project.Name, blueprint.Spec.SCM.Project.Namespace, ColorReset)
 		fmt.Printf("%s🔍 DRY RUN: Would push scaffolded files to repository%s\n", ColorYellow, ColorReset)
 	} else {
-		provider, err := scm.NewGitLabProvider()
+		factory := NewProviderFactory()
+		provider, err := factory.GetScmProvider(blueprint.Spec.SCM.Provider)
 		if err != nil {
 			return fmt.Errorf("SCM provider initialization failed: %w", err)
 		}
 
 		if err := provider.CreateRepo(&blueprint.Spec); err != nil {
-			return fmt.Errorf("GitLab repository creation failed: %w", err)
+			return fmt.Errorf("%s repository creation failed: %w", blueprint.Spec.SCM.Provider, err)
 		}
 	}
 
 	if isDryRun {
 		fmt.Printf("%s✅ SCM simulation completed successfully%s\n", ColorGreen, ColorReset)
 	} else {
-		fmt.Printf("%s✅ GitLab repository created: %s%s\n", ColorGreen, blueprint.Spec.SCM.Project.Name, ColorReset)
+		fmt.Printf("%s✅ %s repository created: %s%s\n", ColorGreen, blueprint.Spec.SCM.Provider, blueprint.Spec.SCM.Project.Name, ColorReset)
 	}
-	slog.Info("SCM stage completed successfully", "repoName", blueprint.Spec.SCM.Project.Name, "dryRun", isDryRun)
+	slog.Info("SCM stage completed successfully", "provider", blueprint.Spec.SCM.Provider, "repoName", blueprint.Spec.SCM.Project.Name, "dryRun", isDryRun)
 	return nil
 }
 
@@ -206,22 +204,19 @@ func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool, autoAp
 		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform plan' in container%s\n", ColorYellow, ColorReset)
 		if autoApprove {
 			fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform apply -auto-approve' in container%s\n", ColorYellow, ColorReset)
-			fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure in %s region%s\n",
-				ColorYellow, blueprint.Spec.Cloud.Region, ColorReset)
+			fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure using %s provider in %s region%s\n",
+				ColorYellow, blueprint.Spec.Cloud.Provider, blueprint.Spec.Cloud.Region, ColorReset)
 		} else {
 			fmt.Printf("%s🔍 DRY RUN: Would validate infrastructure (no apply without --auto-approve)%s\n", ColorYellow, ColorReset)
 		}
 	} else {
-		// Create Docker runtime instance
-		dockerRuntime, err := runtime.NewDockerRuntime()
+		factory := NewProviderFactory()
+		provisioner, err := factory.GetProvisioner(blueprint.Spec.Cloud.Provider)
 		if err != nil {
-			return fmt.Errorf("failed to create Docker runtime: %w", err)
+			return fmt.Errorf("provisioner initialization failed: %w", err)
 		}
 
-		// Create provisioner with the runtime
-		terraformProvisioner := provisioner.NewTerraformDockerProvisioner(dockerRuntime)
-
-		if err := terraformProvisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
+		if err := provisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
 			return fmt.Errorf("infrastructure provisioning failed: %w", err)
 		}
 	}
@@ -229,11 +224,11 @@ func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool, autoAp
 	if isDryRun {
 		fmt.Printf("%s✅ Provisioning simulation completed successfully%s\n", ColorGreen, ColorReset)
 	} else if autoApprove {
-		fmt.Printf("%s✅ Infrastructure provisioned successfully in %s%s\n", ColorGreen, blueprint.Spec.Cloud.Region, ColorReset)
+		fmt.Printf("%s✅ Infrastructure provisioned successfully using %s provider in %s%s\n", ColorGreen, blueprint.Spec.Cloud.Provider, blueprint.Spec.Cloud.Region, ColorReset)
 	} else {
 		fmt.Printf("%s✅ Infrastructure validated successfully (use --auto-approve to provision)%s\n", ColorGreen, ColorReset)
 	}
-	slog.Info("Provisioning stage completed successfully", "region", blueprint.Spec.Cloud.Region, "dryRun", isDryRun)
+	slog.Info("Provisioning stage completed successfully", "provider", blueprint.Spec.Cloud.Provider, "region", blueprint.Spec.Cloud.Region, "dryRun", isDryRun)
 	return nil
 }
 
@@ -241,8 +236,10 @@ func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool, autoAp
 func ValidatePrerequisites() error {
 	slog.Info("Validating KloneKit prerequisites")
 
-	// Check if Docker is available (required for provisioning)
-	if _, err := runtime.NewDockerRuntime(); err != nil {
+	// Check if Docker is available (required for provisioning) by attempting to create factory and provisioner
+	factory := NewProviderFactory()
+	_, err := factory.GetProvisioner("aws")
+	if err != nil {
 		return fmt.Errorf("Docker prerequisite check failed: %w", err)
 	}
 

@@ -25,10 +25,6 @@ const (
 	WorkingDirectory = "/workspace"
 )
 
-// Provisioner defines the interface for infrastructure provisioning operations.
-type Provisioner interface {
-	Provision(spec *blueprint.Spec) error
-}
 
 // TerraformDockerProvisioner implements the Provisioner interface using container runtime.
 type TerraformDockerProvisioner struct {
