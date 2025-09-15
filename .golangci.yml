@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 10m
   tests: true
@@ -8,5 +10,8 @@ issues:
     - vendor
 
 linters:
+  default: none  # v2 format - disable all linters by default
   enable:
-    - typecheck
+    - govet      # Go vet checks
+    - ineffassign # Detect ineffective assignments
+    - unused     # Check for unused code
