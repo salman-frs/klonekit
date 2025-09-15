@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -370,6 +371,15 @@ func TestTerraformDockerProvisioner_E2E_Local(t *testing.T) {
 		if err := fixPermissionsRecursively(tempDir); err != nil {
 			t.Logf("Warning: failed to fix permissions during cleanup: %v", err)
 		}
+
+		// In CI environments, force cleanup with elevated permissions if needed
+		if os.Getenv("CI") == "true" || os.Getenv("GITHUB_ACTIONS") == "true" {
+			if err := os.RemoveAll(tempDir); err != nil {
+				t.Logf("Warning: CI cleanup failed: %v", err)
+				// Try with more aggressive cleanup
+				_ = exec.Command("rm", "-rf", tempDir).Run()
+			}
+		}
 		// Note: t.TempDir() handles the actual removal, but we fix permissions first
 	}()
 
@@ -415,11 +425,22 @@ provider "aws" {
 	}
 
 	err = provisioner.Provision(spec, true) // Use auto-approve for tests
-	// We expect this to fail due to AWS credentials or other infrastructure issues
-	// But it should not fail due to Docker connectivity issues
+
+	// In CI environments, AWS providers may download successfully even without credentials
+	// The test should pass if either:
+	// 1. No error (successful provider download + terraform init/plan)
+	// 2. AWS-related error (expected in local dev without credentials)
+	// Only Docker connectivity errors should cause test failure
 	if err != nil && strings.Contains(err.Error(), "failed to create Docker") {
 		t.Errorf("Unexpected Docker connectivity error: %s", err)
+		return
 	}
 
-	t.Logf("Provision result (expected to fail due to AWS setup): %v", err)
+	if err == nil {
+		t.Logf("✅ Provision completed successfully (CI environment with provider access)")
+	} else {
+		t.Logf("ℹ️ Provision failed as expected (likely AWS credentials): %v", err)
+	}
+
+	// Test passes in both cases - success or expected AWS failure
 }
