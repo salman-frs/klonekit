@@ -35,7 +35,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.1'
+          go-version: '1.24'
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -53,16 +53,49 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.1'
+          go-version: '1.24'
       - name: Run tests with coverage
         run: make test
+
+  # ----------------------------------------------------------------
+  # SECURITY: Run security analysis and vulnerability scanning.
+  # ----------------------------------------------------------------
+  security:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Install security tools
+        run: make deps
+      - name: Run security analysis
+        run: make security
+
+  vulnerability-scan:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Install vulnerability scanner
+        run: make deps
+      - name: Run vulnerability scan
+        run: make vuln-check
 
   # ----------------------------------------------------------------
   # BUILD: Compile binaries for all target platforms.
   # ----------------------------------------------------------------
   build:
     name: Build Binaries
-    needs: [lint, test]
+    needs: [lint, test, security, vulnerability-scan]
     # Only run builds on tags or manual dispatch, not on regular pushes
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -91,7 +124,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.1'
+          go-version: '1.24'
       - name: Get version
         id: version
         run: |

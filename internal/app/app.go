@@ -1,12 +1,12 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
 	"klonekit/internal/parser"
-	"klonekit/internal/scaffolder"
 	"klonekit/pkg/blueprint"
 )
 
@@ -22,7 +22,7 @@ const (
 	ColorWhite  = "\033[37m"
 )
 
-// Apply orchestrates the complete KloneKit workflow using a stateful execution engine.
+// Apply orchestrates the complete KloneKit workflow using a dynamic stage runner.
 // This function implements the Facade pattern over all internal components with resume capability.
 func Apply(blueprintPath string, isDryRun bool, retainState bool, autoApprove bool) error {
 	slog.Info("Starting KloneKit apply workflow", "blueprintPath", blueprintPath, "dryRun", isDryRun)
@@ -63,68 +63,19 @@ func Apply(blueprintPath string, isDryRun bool, retainState bool, autoApprove bo
 	}
 	slog.Info("Blueprint parsed successfully", "name", blueprint.Metadata.Name, "kind", blueprint.Kind)
 
-	// Stage 1: Scaffold Terraform files
-	if !state.shouldSkipStage(StageScaffold) {
-		fmt.Printf("%s🚧 Stage 1: Scaffolding Terraform files%s\n", ColorCyan, ColorReset)
-		if err := executeScaffoldStage(blueprint, isDryRun); err != nil {
-			return fmt.Errorf("scaffolding failed: %w", err)
-		}
+	// Build the stages slice
+	providerFactory := NewProviderFactory()
+	stages := buildStages(blueprint, providerFactory, isDryRun, autoApprove)
 
-		// Update state after successful completion
-		state.LastSuccessfulStage = StageScaffold
-		if !isDryRun {
-			if err := saveState(state); err != nil {
-				return fmt.Errorf("failed to save state after scaffolding: %w", err)
-			}
-		}
-		fmt.Println()
-	} else {
-		fmt.Printf("%s⏭️  Stage 1: Scaffolding (skipped - already completed)%s\n", ColorGreen, ColorReset)
-		fmt.Println()
-	}
-
-	// Stage 2: Source Control Management
-	if !state.shouldSkipStage(StageSCM) {
-		fmt.Printf("%s📱 Stage 2: Creating GitLab repository%s\n", ColorPurple, ColorReset)
-		if err := executeSCMStage(blueprint, isDryRun); err != nil {
-			return fmt.Errorf("SCM stage failed: %w", err)
-		}
-
-		// Update state after successful completion
-		state.LastSuccessfulStage = StageSCM
-		if !isDryRun {
-			if err := saveState(state); err != nil {
-				return fmt.Errorf("failed to save state after SCM: %w", err)
-			}
-		}
-		fmt.Println()
-	} else {
-		fmt.Printf("%s⏭️  Stage 2: SCM (skipped - already completed)%s\n", ColorGreen, ColorReset)
-		fmt.Println()
-	}
-
-	// Stage 3: Infrastructure Provisioning
-	if !state.shouldSkipStage(StageProvision) {
-		fmt.Printf("%s🏗️  Stage 3: Provisioning infrastructure%s\n", ColorRed, ColorReset)
-		if err := executeProvisionStage(blueprint, isDryRun, autoApprove); err != nil {
-			return fmt.Errorf("provisioning stage failed: %w", err)
-		}
-
-		// Update state after successful completion
-		state.LastSuccessfulStage = StageProvision
-		if !isDryRun {
-			if err := saveState(state); err != nil {
-				return fmt.Errorf("failed to save state after provisioning: %w", err)
-			}
-		}
-		fmt.Println()
-	} else {
-		fmt.Printf("%s⏭️  Stage 3: Provisioning (skipped - already completed)%s\n", ColorGreen, ColorReset)
-		fmt.Println()
+	// Execute stages using the dynamic stage runner
+	ctx := context.Background()
+	if err := runStages(ctx, stages, state, isDryRun); err != nil {
+		return fmt.Errorf("stage execution failed: %w", err)
 	}
 
 	// Mark workflow as completed and clean up state file
 	state.LastSuccessfulStage = StageCompleted
+	state.LastCompletedStage = "completed"
 	if !isDryRun {
 		if retainState {
 			// Save final state for auditing purposes
@@ -154,83 +105,103 @@ func Apply(blueprintPath string, isDryRun bool, retainState bool, autoApprove bo
 	return nil
 }
 
-// executeScaffoldStage handles the scaffolding stage of the workflow
-func executeScaffoldStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
-	if err := scaffolder.Scaffold(&blueprint.Spec, isDryRun); err != nil {
-		return err
+// buildStages constructs the slice of stages to be executed based on the blueprint
+func buildStages(blueprint *blueprint.Blueprint, providerFactory *ProviderFactory, isDryRun bool, autoApprove bool) []Stage {
+	stages := []Stage{
+		NewScaffoldStage(blueprint, isDryRun),
+		NewScmStage(blueprint, providerFactory, isDryRun),
+		NewProvisionStage(blueprint, providerFactory, isDryRun, autoApprove),
 	}
+	return stages
+}
 
-	if isDryRun {
-		fmt.Printf("%s✅ Scaffolding simulation completed successfully%s\n", ColorGreen, ColorReset)
-	} else {
-		fmt.Printf("%s✅ Terraform files scaffolded to: %s%s\n", ColorGreen, blueprint.Spec.Scaffold.Destination, ColorReset)
+// runStages executes the stages in order, skipping those already completed
+func runStages(ctx context.Context, stages []Stage, state *ExecutionState, isDryRun bool) error {
+	for i, stage := range stages {
+		stageName := stage.Name()
+
+		// Check if this stage should be skipped
+		if shouldSkipStage(state, stageName) {
+			fmt.Printf("%s⏭️  Stage %d: %s (skipped - already completed)%s\n", ColorGreen, i+1, stageName, ColorReset)
+			fmt.Println()
+			continue
+		}
+
+		// Execute the stage
+		fmt.Printf("%s🔄 Stage %d: %s%s\n", getStageColor(stageName), i+1, stageName, ColorReset)
+		if err := stage.Execute(ctx, state); err != nil {
+			return fmt.Errorf("stage '%s' failed: %w", stageName, err)
+		}
+
+		// Update state after successful completion
+		state.LastCompletedStage = stageName
+		// Update legacy field for backward compatibility
+		switch stageName {
+		case "scaffold":
+			state.LastSuccessfulStage = StageScaffold
+		case "scm":
+			state.LastSuccessfulStage = StageSCM
+		case "provision":
+			state.LastSuccessfulStage = StageProvision
+		}
+
+		if !isDryRun {
+			if err := saveState(state); err != nil {
+				return fmt.Errorf("failed to save state after stage '%s': %w", stageName, err)
+			}
+		}
+		fmt.Println()
 	}
-	slog.Info("Scaffolding completed successfully", "destination", blueprint.Spec.Scaffold.Destination, "dryRun", isDryRun)
 	return nil
 }
 
-// executeSCMStage handles the source control management stage of the workflow
-func executeSCMStage(blueprint *blueprint.Blueprint, isDryRun bool) error {
-	if isDryRun {
-		fmt.Printf("%s🔍 DRY RUN: Would create %s repository '%s' in namespace '%s'%s\n",
-			ColorYellow, blueprint.Spec.SCM.Provider, blueprint.Spec.SCM.Project.Name, blueprint.Spec.SCM.Project.Namespace, ColorReset)
-		fmt.Printf("%s🔍 DRY RUN: Would push scaffolded files to repository%s\n", ColorYellow, ColorReset)
-	} else {
-		factory := NewProviderFactory()
-		provider, err := factory.GetScmProvider(blueprint.Spec.SCM.Provider)
-		if err != nil {
-			return fmt.Errorf("SCM provider initialization failed: %w", err)
-		}
-
-		if err := provider.CreateRepo(&blueprint.Spec); err != nil {
-			return fmt.Errorf("%s repository creation failed: %w", blueprint.Spec.SCM.Provider, err)
-		}
+// shouldSkipStage determines if a stage should be skipped based on the current state
+func shouldSkipStage(state *ExecutionState, stageName string) bool {
+	if state == nil || state.LastCompletedStage == "" {
+		return false // Fresh start, don't skip any stage
 	}
 
-	if isDryRun {
-		fmt.Printf("%s✅ SCM simulation completed successfully%s\n", ColorGreen, ColorReset)
-	} else {
-		fmt.Printf("%s✅ %s repository created: %s%s\n", ColorGreen, blueprint.Spec.SCM.Provider, blueprint.Spec.SCM.Project.Name, ColorReset)
+	// If the stage was already completed, skip it
+	completedStages := getCompletedStages(state.LastCompletedStage)
+	for _, completed := range completedStages {
+		if completed == stageName {
+			return true
+		}
 	}
-	slog.Info("SCM stage completed successfully", "provider", blueprint.Spec.SCM.Provider, "repoName", blueprint.Spec.SCM.Project.Name, "dryRun", isDryRun)
-	return nil
+	return false
 }
 
-// executeProvisionStage handles the infrastructure provisioning stage of the workflow
-func executeProvisionStage(blueprint *blueprint.Blueprint, isDryRun bool, autoApprove bool) error {
-	if isDryRun {
-		fmt.Printf("%s🔍 DRY RUN: Would pull Terraform Docker image%s\n", ColorYellow, ColorReset)
-		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform init' in container%s\n", ColorYellow, ColorReset)
-		fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform plan' in container%s\n", ColorYellow, ColorReset)
-		if autoApprove {
-			fmt.Printf("%s🔍 DRY RUN: Would execute 'terraform apply -auto-approve' in container%s\n", ColorYellow, ColorReset)
-			fmt.Printf("%s🔍 DRY RUN: Would provision infrastructure using %s provider in %s region%s\n",
-				ColorYellow, blueprint.Spec.Cloud.Provider, blueprint.Spec.Cloud.Region, ColorReset)
-		} else {
-			fmt.Printf("%s🔍 DRY RUN: Would validate infrastructure (no apply without --auto-approve)%s\n", ColorYellow, ColorReset)
-		}
-	} else {
-		factory := NewProviderFactory()
-		provisioner, err := factory.GetProvisioner(blueprint.Spec.Cloud.Provider)
-		if err != nil {
-			return fmt.Errorf("provisioner initialization failed: %w", err)
-		}
-
-		if err := provisioner.Provision(&blueprint.Spec, autoApprove); err != nil {
-			return fmt.Errorf("infrastructure provisioning failed: %w", err)
-		}
+// getCompletedStages returns the list of stages that are considered completed
+// based on the last completed stage
+func getCompletedStages(lastCompletedStage string) []string {
+	switch lastCompletedStage {
+	case "completed":
+		return []string{"scaffold", "scm", "provision"}
+	case "provision":
+		return []string{"scaffold", "scm", "provision"}
+	case "scm":
+		return []string{"scaffold", "scm"}
+	case "scaffold":
+		return []string{"scaffold"}
+	default:
+		return []string{}
 	}
-
-	if isDryRun {
-		fmt.Printf("%s✅ Provisioning simulation completed successfully%s\n", ColorGreen, ColorReset)
-	} else if autoApprove {
-		fmt.Printf("%s✅ Infrastructure provisioned successfully using %s provider in %s%s\n", ColorGreen, blueprint.Spec.Cloud.Provider, blueprint.Spec.Cloud.Region, ColorReset)
-	} else {
-		fmt.Printf("%s✅ Infrastructure validated successfully (use --auto-approve to provision)%s\n", ColorGreen, ColorReset)
-	}
-	slog.Info("Provisioning stage completed successfully", "provider", blueprint.Spec.Cloud.Provider, "region", blueprint.Spec.Cloud.Region, "dryRun", isDryRun)
-	return nil
 }
+
+// getStageColor returns the appropriate color for each stage
+func getStageColor(stageName string) string {
+	switch stageName {
+	case "scaffold":
+		return ColorCyan
+	case "scm":
+		return ColorPurple
+	case "provision":
+		return ColorRed
+	default:
+		return ColorWhite
+	}
+}
+
 
 // ValidatePrerequisites checks that all required external dependencies are available.
 func ValidatePrerequisites() error {

@@ -21,7 +21,8 @@ const (
 type ExecutionState struct {
 	SchemaVersion       string         `json:"schema_version"`
 	RunID               string         `json:"run_id"`
-	LastSuccessfulStage ExecutionStage `json:"last_successful_stage"`
+	LastCompletedStage  string         `json:"last_completed_stage"`
+	LastSuccessfulStage ExecutionStage `json:"last_successful_stage"` // Kept for backward compatibility
 	BlueprintPath       string         `json:"blueprint_path"`
 	CreatedAt           time.Time      `json:"created_at"`
 	LastUpdatedAt       time.Time      `json:"last_updated_at"`
@@ -61,7 +62,7 @@ func saveState(state *ExecutionState) error {
 		return fmt.Errorf("failed to serialize state: %w", err)
 	}
 
-	if err := os.WriteFile(StateFileName, data, 0644); err != nil {
+	if err := os.WriteFile(StateFileName, data, 0600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
@@ -81,29 +82,6 @@ func newState(blueprintPath, runID string) *ExecutionState {
 	}
 }
 
-// shouldSkipStage determines if a stage should be skipped based on the current state
-func (s *ExecutionState) shouldSkipStage(stage ExecutionStage) bool {
-	if s == nil || s.LastSuccessfulStage == "" {
-		return false // Fresh start, don't skip any stage
-	}
-
-	switch stage {
-	case StageScaffold:
-		return s.LastSuccessfulStage == StageScaffold ||
-			s.LastSuccessfulStage == StageSCM ||
-			s.LastSuccessfulStage == StageProvision ||
-			s.LastSuccessfulStage == StageCompleted
-	case StageSCM:
-		return s.LastSuccessfulStage == StageSCM ||
-			s.LastSuccessfulStage == StageProvision ||
-			s.LastSuccessfulStage == StageCompleted
-	case StageProvision:
-		return s.LastSuccessfulStage == StageProvision ||
-			s.LastSuccessfulStage == StageCompleted
-	default:
-		return false
-	}
-}
 
 // getNextStage returns the next stage to execute based on the current state
 func (s *ExecutionState) getNextStage() ExecutionStage {

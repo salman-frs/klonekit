@@ -71,11 +71,8 @@ func TestProviderFactory_GetScmProvider(t *testing.T) {
 				return
 			}
 
-			// Verify provider implements ScmProvider interface
-			_, ok := provider.(scm.ScmProvider)
-			if !ok {
-				t.Errorf("Provider does not implement ScmProvider interface, got: %T", provider)
-			}
+			// Provider is already of type scm.ScmProvider (returned from GetScmProvider)
+			// Verify it's the expected concrete implementation type
 
 			// For GitLab, we can check the specific type
 			if tt.providerName == "gitlab" {

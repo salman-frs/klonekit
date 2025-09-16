@@ -76,7 +76,9 @@ func createDockerClientWithDynamicSocket() (*client.Client, error) {
 		if err != nil {
 			lastErr = err
 			slog.Debug("Failed to ping Docker daemon", "path", socketPath, "error", err)
-			dockerClient.Close()
+			if cerr := dockerClient.Close(); cerr != nil {
+				slog.Debug("Error closing Docker client", "error", cerr)
+			}
 			continue
 		}
 
@@ -95,7 +97,9 @@ func createDockerClientWithDynamicSocket() (*client.Client, error) {
 	ctx := context.Background()
 	_, err = dockerClient.Ping(ctx)
 	if err != nil {
-		dockerClient.Close()
+		if cerr := dockerClient.Close(); cerr != nil {
+			slog.Debug("Error closing Docker client", "error", cerr)
+		}
 		return nil, fmt.Errorf("failed to connect to Docker daemon with all methods: last error was %w", err)
 	}
 
@@ -269,7 +273,7 @@ func (cr *containerReader) Close() error {
 
 	// Close the reader if it exists
 	if cr.reader != nil {
-		cr.reader.Close()
+		cr.reader.Close() // #nosec G104
 	}
 
 	// Wait for container to finish (with timeout to avoid hanging)
