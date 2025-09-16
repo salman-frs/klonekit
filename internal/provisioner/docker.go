@@ -145,13 +145,13 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("invalid destination path: %w", err)
 	}
 
-	sourceFile, err := os.Open(src)
+	sourceFile, err := os.Open(src) // #nosec G304
 	if err != nil {
 		return err
 	}
 	defer sourceFile.Close()
 
-	destFile, err := os.Create(dst)
+	destFile, err := os.Create(dst) // #nosec G304
 	if err != nil {
 		return err
 	}

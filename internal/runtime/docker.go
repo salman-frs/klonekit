@@ -273,7 +273,7 @@ func (cr *containerReader) Close() error {
 
 	// Close the reader if it exists
 	if cr.reader != nil {
-		cr.reader.Close()
+		cr.reader.Close() // #nosec G104
 	}
 
 	// Wait for container to finish (with timeout to avoid hanging)

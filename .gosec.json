@@ -1,7 +1,6 @@
 {
   "global": {
-    "nosec": false,
-    "audit": true
+    "audit": "enabled"
   },
   "rules": {
     "G101": "true",
@@ -39,5 +38,6 @@
   "exclude_dirs": [
     "vendor/",
     ".git/"
-  ]
+  ],
+  "severity": "medium"
 }

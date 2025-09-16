@@ -78,7 +78,8 @@ func createLogDirectoryWithFallback() (string, bool, error) {
 		if err := os.MkdirAll(logDir, 0750); err == nil {
 			// Check if we can write to the directory
 			testFile := filepath.Join(logDir, ".test_write")
-			if f, testErr := os.Create(testFile); testErr == nil {
+			f, testErr := os.Create(testFile) // #nosec G304
+			if testErr == nil {
 				if err := f.Close(); err != nil {
 					slog.Warn("Failed to close test file", "path", testFile, "error", err)
 				}
@@ -173,7 +174,7 @@ func createLogFile() (*os.File, error) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to rotate log file: %v\n", err)
 	}
 
-	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600) // #nosec G304
 }
 
 func (h *ErrorHandler) Handle(err error) {

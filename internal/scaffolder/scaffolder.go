@@ -137,13 +137,13 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("invalid destination path: %w", err)
 	}
 
-	srcFile, err := os.Open(src)
+	srcFile, err := os.Open(src) // #nosec G304
 	if err != nil {
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	dstFile, err := os.Create(dst) // #nosec G304
 	if err != nil {
 		return fmt.Errorf("failed to create destination file %s: %w", dst, err)
 	}

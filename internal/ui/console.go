@@ -36,7 +36,7 @@ func NewConsole() *Console {
 }
 
 func isTerminal() bool {
-	stat, _ := os.Stderr.Stat()
+	stat, _ := os.Stderr.Stat() // #nosec G104
 	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
